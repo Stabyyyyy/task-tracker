@@ -32,6 +32,10 @@
       value: 0,
       periodKey: null,
       history: {},
+      // Snapshot per closed period: { start, end, value, target, outcome,
+      // inferred }. `history` stays the numeric ledger; this map only adds the
+      // target that was in force when the period closed, plus its outcome.
+      periods: {},
       log: []
     };
   }
@@ -42,12 +46,61 @@
     return 'day';
   }
 
+  /** First and last calendar day covered by a period key. */
+  function periodBounds(counter, key) {
+    if (!key) return { start: null, end: null };
+    if (counter.type === 'periodic' && counter.period === 'month') {
+      return { start: key + '-01', end: U.lastDayOfMonthKey(key) };
+    }
+    if (counter.type === 'periodic') {
+      const monday = U.weekKeyToMonday(key);
+      return { start: monday, end: U.addDays(monday, 6) };
+    }
+    return { start: key, end: key };
+  }
+
+  /** How a finished period compares to the target it was measured against. */
+  function outcomeOf(value, target) {
+    if (value === null || value === undefined) return 'unknown';
+    if (target === null || target === undefined) return 'none';
+    if (value > target) return 'exceeded';
+    if (value >= target) return 'met';
+    return 'missed';
+  }
+
   function periodKeyFor(counter, now) {
     const key = U.dateKey(now || new Date());
     if (counter.type === 'periodic') {
       return counter.period === 'month' ? U.monthKey(key) : U.isoWeekKey(key);
     }
     return key;
+  }
+
+  /**
+   * Snapshot a closed period. Deliberately independent of the `history` write
+   * above: a daily counter already has yesterday's key in `history` (written by
+   * the last +1 of that day), so sharing that guard would mean records almost
+   * never got created. Never overwrites — a closed period is immutable.
+   */
+  function writeRecord(counter, key) {
+    if (counter.type === 'cumulative') return null;
+    if (!counter.periods) counter.periods = {};
+    if (key in counter.periods) return counter.periods[key];
+
+    const bounds = periodBounds(counter, key);
+    const raw = Number(counter.history[key]);
+    const value = Number.isFinite(raw) ? raw : 0;
+    const target = counter.target === undefined ? null : counter.target;
+
+    counter.periods[key] = {
+      start: bounds.start,
+      end: bounds.end,
+      value,
+      target,
+      outcome: outcomeOf(value, target),
+      inferred: false
+    };
+    return counter.periods[key];
   }
 
   /**
@@ -65,16 +118,20 @@
     if (current <= counter.periodKey) return false;
 
     const unit = periodUnit(counter);
+    const closing = counter.periodKey;
+
     if (counter.type !== 'cumulative') {
-      if (!(counter.periodKey in counter.history)) {
-        counter.history[counter.periodKey] = counter.value || 0;
+      if (!(closing in counter.history)) {
+        counter.history[closing] = counter.value || 0;
       }
+      writeRecord(counter, closing);
     }
 
     // Backfill untouched periods with an explicit 0 so stats can distinguish
     // "recorded zero" from "app was not opened".
-    U.periodsBetween(unit, counter.periodKey, current, 400).forEach((key) => {
+    U.periodsBetween(unit, closing, current, 400).forEach((key) => {
       if (!(key in counter.history)) counter.history[key] = 0;
+      writeRecord(counter, key);
     });
 
     counter.periodKey = current;
@@ -223,6 +280,9 @@
     newCounter,
     periodUnit,
     periodKeyFor,
+    periodBounds,
+    outcomeOf,
+    writeRecord,
     reconcile,
     reconcileAll,
     effectiveValue,

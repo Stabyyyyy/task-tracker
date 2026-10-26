@@ -14,9 +14,23 @@
 
   const App = (TT.App = {
     filters: TT.Model.emptyFilters(),
-    viewState: { filtersOpen: false },
+    viewState: { filtersOpen: false, collapsed: {} },
     route: 'tasks'
   });
+
+  /* ------------------------------------------------------------ list layout */
+
+  const DEFAULT_LIST_VIEW = { groupBy: 'date', sortBy: 'due' };
+
+  function listView() {
+    const lv = TT.Store.get().settings.listView;
+    return lv || DEFAULT_LIST_VIEW;
+  }
+
+  /** Persisted, so "group by category" survives a reload. */
+  function setListView(patch) {
+    TT.Store.setSetting('listView', Object.assign({}, listView(), patch));
+  }
 
   /* ---------------------------------------------------------------- router */
 
@@ -251,6 +265,8 @@
 
   App.render = render;
   App.navigate = navigate;
+  App.listView = listView;
+  App.setListView = setListView;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);

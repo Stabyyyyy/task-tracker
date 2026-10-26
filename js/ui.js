@@ -213,7 +213,12 @@
       : '<button type="button" class="check' + (done ? ' is-on' : '') + '" data-action="toggle-task" data-id="' + task.id + '" ' +
         'aria-label="' + (done ? 'Mark incomplete' : 'Mark complete') + '">' + icon('check') + '</button>';
 
-    return '<article class="task-card' + (overdue ? ' is-overdue' : '') + (done ? ' is-done' : '') + '" data-task-id="' + task.id + '">' +
+    // One colour bar per card: the category that owns most of its tags. Every
+    // tag still gets its own pill below, so a mixed task shows both colours.
+    const primary = TT.Model.primaryCategory(task);
+    const catClass = primary ? ' is-cat cat-' + primary.color : '';
+
+    return '<article class="task-card' + (overdue ? ' is-overdue' : '') + (done ? ' is-done' : '') + catClass + '" data-task-id="' + task.id + '">' +
       checkEl +
       '<div class="task-main">' +
         '<div class="task-title-row">' +
@@ -233,12 +238,18 @@
     const c = task.counter;
     const typeLabel = c.type === 'daily' ? 'Resets daily' : c.type === 'cumulative' ? 'Running total' : (c.period === 'month' ? 'Resets monthly' : 'Resets weekly');
     const remindOn = !!task.reminders.counterTime;
+    const tags = (task.tagIds || []).map((id) => TT.Model.tagById(id)).filter(Boolean);
+    const primary = TT.Model.primaryCategory(task);
+    const catClass = primary ? ' is-cat cat-' + primary.color : '';
 
-    return '<article class="counter-card' + (p.met ? ' is-met' : '') + '" data-task-id="' + task.id + '">' +
+    return '<article class="counter-card' + (p.met ? ' is-met' : '') + catClass + '" data-task-id="' + task.id + '">' +
       '<header class="counter-head">' +
         '<div class="counter-title-wrap">' +
           '<h3 class="counter-title">' + esc(task.title) + '</h3>' +
           '<div class="counter-sub">' + icon(c.type === 'cumulative' ? 'chart' : 'target') + esc(p.periodLabel) + ' · ' + esc(typeLabel) + '</div>' +
+          (tags.length
+            ? '<div class="task-tags counter-tags">' + tags.map((t) => tagPill(t)).join('') + '</div>'
+            : '') +
         '</div>' +
         '<button type="button" class="target-btn" data-action="edit-target" data-id="' + task.id + '" ' +
           'title="Change target">' + icon('target') + (p.target == null ? 'Set target' : 'Target ' + p.target) + '</button>' +

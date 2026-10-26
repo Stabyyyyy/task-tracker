@@ -48,6 +48,7 @@
           (filterCount(f) ? '<span class="pill-count">' + filterCount(f) + '</span>' : '') +
         '</button>' +
       '</div>' +
+      viewOptsHtml() +
       '<div id="filter-panel" class="filter-panel"' + (TT.App.viewState.filtersOpen ? '' : ' hidden') + '>' +
         filterPanelHtml(f, s) +
       '</div>' +
@@ -55,6 +56,33 @@
 
     renderBody();
     bind();
+  }
+
+  /** Group and sort controls. Kept out of the search row so the caret is safe. */
+  function viewOptsHtml() {
+    const lv = TT.App.listView();
+    const groups = [['date', 'Due date'], ['category', 'Category']];
+    const sorts = [
+      ['due', 'Due date'],
+      ['category', 'Category'],
+      ['tag', 'Tag'],
+      ['created', 'Created (newest)']
+    ];
+
+    const select = (id, label, options, current) =>
+      '<label class="view-opt" for="' + id + '">' +
+        '<span class="view-opt-label">' + label + '</span>' +
+        '<select id="' + id + '" class="input input-sm">' +
+          options.map((pair) =>
+            '<option value="' + pair[0] + '"' + (current === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'
+          ).join('') +
+        '</select>' +
+      '</label>';
+
+    return '<div class="view-opts">' +
+      select('group-by', 'Group by', groups, lv.groupBy) +
+      select('sort-by', 'Sort by', sorts, lv.sortBy) +
+    '</div>';
   }
 
   function filterPanelHtml(f, s) {
@@ -97,7 +125,8 @@
 
     const f = activeFilters();
     const today = U.todayKey();
-    const list = TT.Model.visibleTasks(f);
+    const lv = TT.App.listView();
+    const list = TT.Model.visibleTasks(f, lv.sortBy);
     const counts = TT.Model.counts();
 
     if (!list.length) {
@@ -122,24 +151,45 @@
       return;
     }
 
-    const groups = TT.Model.groupTasks(list, today);
-    body.innerHTML = groups.map((group) =>
-      '<section class="group group-' + group.key + '">' +
-        '<h2 class="group-head">' +
-          '<span class="group-title">' + esc(group.label) + '</span>' +
-          '<span class="group-count">' + group.tasks.length + '</span>' +
-        '</h2>' +
-        '<div class="group-body">' +
-          group.tasks.map((t) => (t.kind === 'counter' ? UI.counterCard(t) : UI.taskCard(t))).join('') +
-        '</div>' +
-      '</section>'
-    ).join('');
+    const groups = lv.groupBy === 'category'
+      ? TT.Model.groupTasksByCategory(list)
+      : TT.Model.groupTasks(list, today);
+
+    body.innerHTML = groups.map((group) => groupHtml(group, lv.groupBy)).join('');
+  }
+
+  function groupHtml(group, groupBy) {
+    const key = groupBy + ':' + group.key;
+    const collapsed = !!TT.App.viewState.collapsed[key];
+
+    return '<section class="group group-' + group.key + (collapsed ? ' is-collapsed' : '') + '">' +
+      '<button type="button" class="group-head" data-action="toggle-group" data-key="' + esc(key) + '" ' +
+        'aria-expanded="' + (collapsed ? 'false' : 'true') + '">' +
+        '<span class="group-chevron">' + UI.icon('right') + '</span>' +
+        (group.color ? '<i class="dot cat-' + group.color + '"></i>' : '') +
+        '<span class="group-title">' + esc(group.label) + '</span>' +
+        '<span class="group-count">' + group.tasks.length + '</span>' +
+      '</button>' +
+      '<div class="group-body"' + (collapsed ? ' hidden' : '') + '>' +
+        group.tasks.map((t) => (t.kind === 'counter' ? UI.counterCard(t) : UI.taskCard(t))).join('') +
+      '</div>' +
+    '</section>';
   }
 
   function bind() {
     const input = root.querySelector('#search-input');
     const from = root.querySelector('#filter-from');
     const to = root.querySelector('#filter-to');
+    const groupBy = root.querySelector('#group-by');
+    const sortBy = root.querySelector('#sort-by');
+
+    // Both write through settings, which commits and re-renders on its own.
+    if (groupBy) {
+      groupBy.addEventListener('change', () => TT.App.setListView({ groupBy: groupBy.value }));
+    }
+    if (sortBy) {
+      sortBy.addEventListener('change', () => TT.App.setListView({ sortBy: sortBy.value }));
+    }
 
     if (input) {
       input.addEventListener('input', () => {
@@ -207,6 +257,24 @@
       if (i >= 0) f.tagIds.splice(i, 1);
       else f.tagIds.push(id);
       TT.App.render();
+      return true;
+    }
+
+    if (action === 'toggle-group') {
+      const key = el.getAttribute('data-key');
+      const collapsed = TT.App.viewState.collapsed;
+      if (collapsed[key]) delete collapsed[key];
+      else collapsed[key] = true;
+
+      // Toggle in place: a full render would rebuild the list and lose the
+      // scroll position for no benefit.
+      const section = el.closest('.group');
+      if (section) {
+        section.classList.toggle('is-collapsed', !!collapsed[key]);
+        const body = section.querySelector('.group-body');
+        if (body) body.hidden = !!collapsed[key];
+        el.setAttribute('aria-expanded', collapsed[key] ? 'false' : 'true');
+      }
       return true;
     }
 

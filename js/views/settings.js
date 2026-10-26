@@ -87,7 +87,7 @@
           '<span class="manage-name">' + esc(cat.name) + '</span>' +
           '<span class="hint">' + usage.tags + ' ' + U.plural(usage.tags, 'tag') + ' · ' + usage.tasks + ' ' + U.plural(usage.tasks, 'task') + '</span>' +
           '<span class="spacer"></span>' +
-          '<button type="button" class="icon-btn" data-action="edit-category" data-id="' + cat.id + '" aria-label="Rename category">' + UI.icon('pencil') + '</button>' +
+          '<button type="button" class="icon-btn" data-action="edit-category" data-id="' + cat.id + '" aria-label="Edit category">' + UI.icon('pencil') + '</button>' +
           '<button type="button" class="icon-btn is-danger" data-action="delete-category" data-id="' + cat.id + '" aria-label="Delete category">' + UI.icon('trash') + '</button>' +
         '</div>' +
         (tags.length
@@ -114,7 +114,7 @@
     ).join('');
 
     return '<section class="panel panel-wide">' +
-      '<div class="panel-head"><h2>Tags &amp; categories</h2><span class="hint">Rename anything — tasks follow along</span></div>' +
+      '<div class="panel-head"><h2>Tags &amp; categories</h2><span class="hint">Rename or recolour anything — tasks follow along</span></div>' +
       '<div class="cat-list">' + (catBlocks || '<p class="hint">No categories yet. Add one below.</p>') + '</div>' +
 
       '<div class="inline-form">' +
@@ -187,6 +187,66 @@
         const value = input.value.trim();
         m.close();
         resolve(value || null);
+      }
+      m.footer.querySelector('[data-ok]').addEventListener('click', ok);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') ok();
+      });
+    });
+  }
+
+  /**
+   * Rename a category and pick its colour in one place. The colour is what
+   * every task card, calendar pill and group header reads, so it has to be
+   * editable — not just settable when the category is created.
+   */
+  function promptCategory(cat) {
+    const swatches = TT.Store.CATEGORY_COLORS.map((c) =>
+      '<label class="swatch cat-' + c + (cat.color === c ? ' is-on' : '') + '" title="' + c + '">' +
+        '<input type="radio" name="cat-color" value="' + c + '"' + (cat.color === c ? ' checked' : '') + '>' +
+        '<span class="swatch-dot"></span>' +
+      '</label>'
+    ).join('');
+
+    return new Promise((resolve) => {
+      let answered = false;
+      const m = UI.modal({
+        title: 'Edit category',
+        size: 'sm',
+        body: '<div class="field">' +
+            '<label class="field-label" for="prompt-input">Category name</label>' +
+            '<input id="prompt-input" class="input" value="' + esc(cat.name) + '">' +
+          '</div>' +
+          '<div class="field">' +
+            '<span class="field-label">Colour</span>' +
+            '<div class="swatch-row">' + swatches + '</div>' +
+          '</div>',
+        footer: '<span class="spacer"></span>' +
+          '<button type="button" class="btn btn-ghost" data-close>Cancel</button>' +
+          '<button type="button" class="btn btn-primary" data-ok>Save</button>',
+        onClose: () => {
+          if (!answered) resolve(null);
+        }
+      });
+
+      const input = m.body.querySelector('#prompt-input');
+      input.select();
+      m.body.querySelectorAll('input[name="cat-color"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          m.body.querySelectorAll('.swatch').forEach((s) => s.classList.remove('is-on'));
+          radio.closest('.swatch').classList.add('is-on');
+        });
+      });
+
+      function ok() {
+        answered = true;
+        const checked = m.body.querySelector('input[name="cat-color"]:checked');
+        const patch = {
+          name: input.value.trim() || cat.name,
+          color: checked ? checked.value : cat.color
+        };
+        m.close();
+        resolve(patch);
       }
       m.footer.querySelector('[data-ok]').addEventListener('click', ok);
       input.addEventListener('keydown', (e) => {
@@ -341,8 +401,10 @@
     if (action === 'edit-category') {
       const cat = TT.Model.categoryById(el.getAttribute('data-id'));
       if (!cat) return true;
-      promptText({ title: 'Rename category', label: 'Category name', value: cat.name }).then((name) => {
-        if (name) TT.Model.updateCategory(cat.id, { name });
+      promptCategory(cat).then((patch) => {
+        if (!patch) return;
+        TT.Model.updateCategory(cat.id, patch);
+        UI.toast('Category updated', 'success');
       });
       return true;
     }

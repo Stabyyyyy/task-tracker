@@ -29,6 +29,33 @@
     return state().categories.find((c) => c.id === id) || null;
   }
 
+  /**
+   * The category that gives a card its colour bar: the one owning most of the
+   * task's tags. Ties go to whichever category comes first in settings, so the
+   * bar never flickers as tags are added. Untagged tasks get no category.
+   */
+  function primaryCategory(task) {
+    if (!task || !task.tagIds || !task.tagIds.length) return null;
+    const s = state();
+    const counts = {};
+    task.tagIds.forEach((id) => {
+      const tag = s.tags.find((x) => x.id === id);
+      if (!tag || !tag.categoryId) return;
+      counts[tag.categoryId] = (counts[tag.categoryId] || 0) + 1;
+    });
+
+    let best = null;
+    let bestCount = 0;
+    s.categories.forEach((cat) => {
+      const n = counts[cat.id] || 0;
+      if (n > bestCount) {
+        best = cat;
+        bestCount = n;
+      }
+    });
+    return best;
+  }
+
   /* ------------------------------------------------------------- reminders */
 
   function normalizeReminders(input, kind) {
@@ -117,6 +144,7 @@
           const sameShape = t.counter.type === next.type &&
             (t.counter.period || null) === (next.period || null);
           next.history = t.counter.history;
+          next.periods = t.counter.periods || {};
           next.log = t.counter.log;
           if (sameShape) {
             next.value = t.counter.value;
@@ -290,8 +318,54 @@
     return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0;
   }
 
-  function visibleTasks(filters) {
-    return allTasks().filter((t) => matches(t, filters)).sort(compare);
+  /** Alphabetically first tag name — stable even when tags are reordered. */
+  function firstTagName(task) {
+    const names = (task.tagIds || [])
+      .map((id) => tagById(id))
+      .filter(Boolean)
+      .map((t) => t.name)
+      .sort();
+    return names.length ? names[0] : null;
+  }
+
+  const SORTS = ['due', 'category', 'tag', 'created'];
+
+  function compareBy(sortBy) {
+    if (sortBy === 'category') {
+      return (a, b) => {
+        const ca = primaryCategory(a);
+        const cb = primaryCategory(b);
+        if (ca && cb && ca.name !== cb.name) return ca.name < cb.name ? -1 : 1;
+        if (ca && !cb) return -1;
+        if (!ca && cb) return 1;
+        return compare(a, b);
+      };
+    }
+
+    if (sortBy === 'tag') {
+      return (a, b) => {
+        const ta = firstTagName(a);
+        const tb = firstTagName(b);
+        if (ta && tb && ta !== tb) return ta < tb ? -1 : 1;
+        if (ta && !tb) return -1;
+        if (!ta && tb) return 1;
+        return compare(a, b);
+      };
+    }
+
+    if (sortBy === 'created') {
+      // Newest first — "what did I just add" is the useful direction here.
+      return (a, b) => {
+        if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+        return compare(a, b);
+      };
+    }
+
+    return compare;
+  }
+
+  function visibleTasks(filters, sortBy) {
+    return allTasks().filter((t) => matches(t, filters)).sort(compareBy(sortBy));
   }
 
   function isOverdue(task, today) {
@@ -333,6 +407,32 @@
         out.push({ key, label: BUCKET_LABELS[key], tasks: groups[key] });
       }
     });
+    return out;
+  }
+
+  /**
+   * Group by category instead of by due bucket. Counters and repeating tasks
+   * stay in their own category rather than being pulled into a separate block,
+   * which is the point of this view.
+   */
+  function groupTasksByCategory(list) {
+    const s = state();
+    const buckets = {};
+    list.forEach((t) => {
+      const cat = primaryCategory(t);
+      const key = cat ? cat.id : '__none';
+      (buckets[key] = buckets[key] || []).push(t);
+    });
+
+    const out = [];
+    s.categories.forEach((cat) => {
+      if (buckets[cat.id] && buckets[cat.id].length) {
+        out.push({ key: cat.id, label: cat.name, color: cat.color, tasks: buckets[cat.id] });
+      }
+    });
+    if (buckets.__none && buckets.__none.length) {
+      out.push({ key: '__none', label: 'Uncategorised', color: 'slate', tasks: buckets.__none });
+    }
     return out;
   }
 
@@ -449,6 +549,7 @@
     taskById,
     tagById,
     categoryById,
+    primaryCategory,
     createTask,
     updateTask,
     toggleComplete,
@@ -458,9 +559,12 @@
     emptyFilters,
     matches,
     visibleTasks,
+    compareBy,
+    SORTS,
     isOverdue,
     bucketOf,
     groupTasks,
+    groupTasksByCategory,
     BUCKET_LABELS,
     countersMatching,
     tagUsage,

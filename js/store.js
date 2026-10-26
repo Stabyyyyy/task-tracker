@@ -11,7 +11,9 @@
 
   const KEY = 'tasktracker.v1';
   const PREIMPORT_KEY = 'tasktracker.preimport';
-  const APP_VERSION = 1;
+  // v2 added counter.periods (per-period target + outcome snapshots) and
+  // settings.listView. Both are additive, so v1 data migrates in place.
+  const APP_VERSION = 2;
 
   const DEFAULT_CATEGORIES = [
     { id: 'cat_work', name: 'Work', color: 'blue' },
@@ -31,6 +33,7 @@
   const STATUSES = ['active', 'done', 'archived'];
   const KINDS = ['plain', 'recurring', 'counter'];
   const COUNTER_TYPES = ['daily', 'cumulative', 'periodic'];
+  const OUTCOMES = ['met', 'missed', 'exceeded', 'none', 'unknown'];
   const UNITS = ['day', 'week', 'month'];
 
   let state = null;
@@ -45,7 +48,8 @@
       notificationsEnabled: false,
       theme: 'system',
       notified: {},
-      lastBackupAt: null
+      lastBackupAt: null,
+      listView: { groupBy: 'date', sortBy: 'due' }
     };
   }
 
@@ -72,6 +76,39 @@
     }
   }
 
+  function normalizeListView(settings) {
+    const d = defaultSettings().listView;
+    const lv = settings.listView && typeof settings.listView === 'object' ? settings.listView : {};
+    settings.listView = {
+      groupBy: lv.groupBy === 'category' ? 'category' : 'date',
+      sortBy: ['due', 'category', 'tag', 'created'].indexOf(lv.sortBy) >= 0 ? lv.sortBy : d.sortBy
+    };
+  }
+
+  /**
+   * v1 -> v2. Rebuild a per-period record for every closed period that only has
+   * a number in `history`. Targets were never stored back then, so the
+   * counter's current target is the only value available; those records are
+   * flagged `inferred` so the review page can say so rather than pretend.
+   * Idempotent — existing records are never touched.
+   */
+  function migrateCounters(next) {
+    if (!TT.Counters || !TT.Counters.writeRecord) return;
+    next.tasks.forEach((task) => {
+      if (!task || task.kind !== 'counter' || !task.counter) return;
+      const c = task.counter;
+      if (!c.periods || typeof c.periods !== 'object') c.periods = {};
+      if (c.type === 'cumulative' || !c.history) return;
+
+      Object.keys(c.history).forEach((key) => {
+        if (key === c.periodKey) return; // still open, not a closed period
+        if (key in c.periods) return;
+        const rec = TT.Counters.writeRecord(c, key);
+        if (rec) rec.inferred = true;
+      });
+    });
+  }
+
   function migrate(raw) {
     const base = blankState();
     if (!raw || typeof raw !== 'object') return base;
@@ -87,6 +124,8 @@
     if (!next.settings.notified || typeof next.settings.notified !== 'object') {
       next.settings.notified = {};
     }
+    normalizeListView(next.settings);
+    migrateCounters(next);
     return next;
   }
 
@@ -98,7 +137,11 @@
       return state;
     }
     try {
-      state = migrate(JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      state = migrate(parsed);
+      // Write the upgraded shape back once, so v1 data is migrated in place
+      // instead of being re-migrated on every open.
+      if (!parsed || parsed.version !== APP_VERSION) persist();
     } catch (err) {
       console.error('Stored data was unreadable, starting fresh.', err);
       state = blankState();
@@ -369,6 +412,27 @@
               history[hkey] = v;
             });
           }
+          // v2 period records are optional: a v1 export simply has none, and a
+          // malformed record is dropped rather than failing the whole import.
+          const periods = {};
+          if (c.type !== 'cumulative' && c.periods && typeof c.periods === 'object') {
+            Object.keys(c.periods).forEach((pkey) => {
+              if (!HISTORY_KEY.test(pkey)) return;
+              const rec = c.periods[pkey];
+              if (!rec || typeof rec !== 'object') return;
+              const v = Number(rec.value);
+              if (!Number.isFinite(v)) return;
+              periods[pkey] = {
+                start: U.isDateKey(rec.start) ? rec.start : null,
+                end: U.isDateKey(rec.end) ? rec.end : null,
+                value: Math.max(0, v),
+                target: rec.target == null || rec.target === '' ? null : Math.max(0, finiteOr(rec.target, 0)),
+                outcome: OUTCOMES.indexOf(rec.outcome) >= 0 ? rec.outcome : 'unknown',
+                inferred: !!rec.inferred
+              };
+            });
+          }
+
           task.counter = {
             type: c.type,
             period: c.type === 'periodic' ? (c.period === 'month' ? 'month' : 'week') : null,
@@ -376,6 +440,7 @@
             value: Math.max(0, finiteOr(c.value, 0)),
             periodKey: HISTORY_KEY.test(String(c.periodKey)) ? c.periodKey : null,
             history,
+            periods,
             log: []
           };
         }
@@ -411,6 +476,10 @@
         t.recurrence.spawnedTaskId = null;
       }
     });
+
+    // A v1 backup has history but no period records — build them here too, so
+    // importing an old file lands in the same shape as loading old localStorage.
+    migrateCounters(nextState);
 
     return { ok: true, errors: [], state: nextState };
   }
@@ -568,7 +637,10 @@
           target: 3,
           value: 1,
           periodKey: U.isoWeekKey(today),
-          history: {},
+          history: {
+            [U.isoWeekKey(U.addDays(today, -14))]: 5,
+            [U.isoWeekKey(U.addDays(today, -7))]: 3
+          },
           log: []
         }
       }),
@@ -585,6 +657,17 @@
     tasks[tasks.length - 1].status = 'archived';
     tasks[tasks.length - 1].archivedAt = now;
     tasks[tasks.length - 1].completedAt = now;
+
+    // Build per-period records for the sample counters exactly the way the live
+    // app does, so the review page has real history on first run.
+    tasks.forEach((t) => {
+      if (t.kind !== 'counter' || !t.counter) return;
+      t.counter.periods = t.counter.periods || {};
+      Object.keys(t.counter.history).forEach((key) => {
+        if (key === t.counter.periodKey) return;
+        TT.Counters.writeRecord(t.counter, key);
+      });
+    });
 
     state = Object.assign(base, { tasks });
     persist();

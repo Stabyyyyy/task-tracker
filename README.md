@@ -23,7 +23,11 @@ python -m http.server 8000
 
 **Tags with categories** — categories are the broad buckets (Work / Life / Study), tags live inside them, and a task can carry several tags. Everything is referenced by id, so renaming a tag or category updates every task automatically.
 
+**Colour coding** — every category has a colour, editable in Settings (name + colour swatches). Task cards, counter cards, repeating tasks and calendar pills all carry it: a coloured bar down the left edge plus one pill per tag in that tag's own category colour. A task tagged in two categories therefore shows one bar and two differently coloured pills. If a categorised task is also overdue, the category bar wins and the overdue signal moves to a red badge, red date text and a red outline.
+
 **Views** — task list with grouping and search; monthly calendar; review page; archive; settings.
+
+**Group and sort** — the list can group by due date (default) or by category, and sort by due date, category, tag or creation date. Group headers are collapsible and show the category colour. Both choices are saved, so the list opens the way you left it. In category mode counters and repeating tasks sit inside their own category rather than in a separate block.
 
 **Filters** — tag, tag category, due-date range, title search. The calendar and the review page carry their own tag filters.
 
@@ -41,7 +45,7 @@ All have `+1` / `−1`. Hitting the target turns the card green, shows a "Goal m
 
 **Reminders** — browser notifications, only while the tab is open. Per-task toggles for the due date, the next repeat, and "target not met by *HH:MM*". If the browser blocks notifications, nudges appear as in-app messages instead.
 
-**Review** — week / month / year, with completed counts, two completion rates, a per-tag breakdown, and counter history (including "3/4 missed" and "5/4 exceeded").
+**Review** — week / month / year, with completed counts, two completion rates, a per-tag breakdown, and counter history. Each closed counter period is stored with its own start date, end date, final count, the target that was in force and the outcome, so the review page can say "3 of 4 met", "1 of 4 missed" and "1 exceeded target" without re-judging the past against today's target.
 
 **Backup** — Export JSON downloads everything; Import validates the file first and asks before replacing anything.
 
@@ -52,6 +56,10 @@ All have `+1` / `−1`. Hitting the target turns the card green, shows a "Goal m
 **Counter rollover is checked on read *and* on write.** A tab left open across midnight, or a `+1` clicked at 00:00:30, lands in the correct period. Rollover only moves forward and never overwrites an existing history entry, so a clock change can't erase a day. Skipped periods are backfilled with an explicit `0` — that's what lets the review page distinguish "recorded zero" from "app wasn't opened".
 
 **Cumulative totals are derived, not stored.** Each day's *delta* goes into history and the total is summed on read. One source of truth, no drift.
+
+**Closed periods get a record; the live one doesn't.** When a counter rolls over, the period that just ended is written to `counter.periods[key]` with `{ start, end, value, target, outcome }`. `history[key]` stays a plain number and remains the ledger everything else reads — the record only adds the target that was in force at the time. The current period is never recorded, so it can't be counted as "missed" halfway through a week. Targets were not stored before v2, so records rebuilt from older data are flagged `inferred` and the review page says so instead of pretending they were measured.
+
+**Migration is additive.** v1 data is upgraded in place on first load: period records are rebuilt from `history`, `settings.listView` is filled with defaults, and `version` becomes 2. `history` keeps its numeric shape, so a v1 export still imports cleanly and an older build can still read new data.
 
 **Repeats are anchored to a day-of-month.** A task due on the 31st goes 31 Jan → 28 Feb → **31 Mar**, not 28 Mar. If you're overdue by several intervals, completing it jumps to the first future occurrence and records how many were skipped, so your completion rate doesn't quietly improve.
 
@@ -84,9 +92,10 @@ Load order in `index.html` matters — these are plain scripts sharing a global 
 
 ## Tweak it
 
-- **Colours** live at the top of `styles.css`: `--accent`, `--bg`, `--surface`, `--danger`, `--success`. Dark mode is the `[data-theme="dark"]` block; category colours are the `.cat-*` classes.
+- **Colours** live at the top of `styles.css`: `--accent`, `--bg`, `--surface`, `--danger`, `--success`. Dark mode is the `[data-theme="dark"]` block; category colours are the `.cat-*` classes, and the eight choices offered in Settings come from `CATEGORY_COLORS` in `store.js`.
 - **New task field** — add it to the draft in `ui.js` (`toDraft`, `buildPayload`, `dynamicHtml`), read it in `model.js` (`createTask`, `updateTask`), then render it in `ui.js` (`taskCard`). Existing data keeps working because missing fields fall back to defaults.
 - **New view** — add a route name to `ROUTES` in `app.js`, register `TT.Views.<route> = { render, onAction }`, add a tab in `index.html`.
+- **New sort order** — add a key to `SORTS` and a branch in `compareBy()` in `model.js`, then an `<option>` in `viewOptsHtml()` in `views/list.js`.
 - **Schema changes** — bump `APP_VERSION` in `store.js` and handle the old shape in `migrate()`. Exported files carry their version, and imports from a newer version are rejected.
 
 ## Data format
@@ -95,17 +104,34 @@ Load order in `index.html` matters — these are plain scripts sharing a global 
 
 ```js
 {
-  version: 1,
+  version: 2,
   tasks: [...], categories: [...], tags: [...],
-  settings: { defaultReminderTime, theme, notified, lastBackupAt, ... },
+  settings: {
+    defaultReminderTime, theme, notified, lastBackupAt,
+    listView: { groupBy: "date" | "category", sortBy: "due" | "category" | "tag" | "created" }
+  },
   meta: { createdAt, updatedAt }
+}
+```
+
+A counter keeps two parallel maps — `history` is the numeric ledger, `periods` the per-period snapshot:
+
+```js
+counter: {
+  type: "daily" | "cumulative" | "periodic",
+  target: 4, value: 3, periodKey: "2026-10-26",
+  history: { "2026-10-25": 5, "2026-10-26": 3 },
+  periods: {
+    "2026-10-25": { start: "2026-10-25", end: "2026-10-25",
+                    value: 5, target: 4, outcome: "exceeded", inferred: false }
+  }
 }
 ```
 
 Exports wrap that in an envelope:
 
 ```js
-{ app: "tasktracker", version: 1, exportedAt: "2026-10-26T...", state: { ... } }
+{ app: "tasktracker", version: 2, exportedAt: "2026-10-26T...", state: { ... } }
 ```
 
 Import checks the envelope, the version, every id, every date (rejecting things like `2026-02-31`), tag references, and the shape of each counter and repeat. Any failure aborts the whole import with a path-qualified error (`tasks[3].dueDate`) and changes nothing. A snapshot of your previous data is kept so you can undo once.
@@ -121,11 +147,13 @@ Import checks the envelope, the version, every id, every date (rejecting things 
 
 ## Manual test checklist
 
-1. Add a task with a due date in the past — it should appear under **Overdue** with a red edge.
+1. Add a task with a due date in the past — it should appear under **Overdue** with a red edge, and its category colour bar should still be visible.
 2. Complete it — it leaves the list, and the toast offers **Undo**.
 3. Archive something, then restore it from the archive.
 4. Create a daily counter with a target of 3, press `+` three times — the card turns green with "Goal met".
 5. Create a repeat "every 2 weeks", complete it, check the new instance is 14 days out.
-6. Reload the page — everything is still there.
-7. Export, erase everything, import the file — you're back where you were.
-8. Open Review, switch Week / Month / Year, and click a tag chip.
+6. Switch **Group by** to Category and **Sort by** to Created — counters and repeats should sit inside their category, and the headers should collapse when clicked.
+7. Settings → Tags & categories → pencil next to a category — change its colour and watch every card and calendar pill follow.
+8. Reload the page — everything is still there, including the group/sort choice.
+9. Export, erase everything, import the file — you're back where you were.
+10. Open Review, switch Week / Month / Year, and click a tag chip.

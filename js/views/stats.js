@@ -94,7 +94,7 @@
                   '<td class="num">' + row.completed + '</td>' +
                   '<td class="num">' + row.due + '</td>' +
                   '<td class="num">' + row.open + '</td>' +
-                  '<td class="bar-col"><span class="mini-bar"><span class="mini-bar-fill cat-bg-' + color + '" style="width:' + width + '%"></span></span></td>' +
+                  '<td class="bar-col"><span class="mini-bar"><span class="mini-bar-fill cat-' + color + '" style="width:' + width + '%"></span></span></td>' +
                 '</tr>';
               }).join('') + '</tbody>' +
             '</table>'
@@ -147,8 +147,39 @@
           '</span>'
         ).join('') + '</div>';
 
-    return '<div class="ch-block">' + head + body + '</div>';
+    return '<div class="ch-block">' + head + outcomeStrip(entry) + body + '</div>';
   }
+
+  /** "3 of 4 met", "1 exceeded target" — read straight off the stored records. */
+  function outcomeStrip(entry) {
+    if (!entry.known) return '';
+    const chips = [];
+    if (entry.met) {
+      chips.push('<span class="ch-out ch-out-met">' + entry.met + ' of ' + entry.known + ' met</span>');
+    }
+    if (entry.missed) {
+      chips.push('<span class="ch-out ch-out-missed">' + entry.missed + ' of ' + entry.known + ' missed</span>');
+    }
+    if (entry.exceeded) {
+      chips.push('<span class="ch-out ch-out-exceeded">' + entry.exceeded + ' exceeded target</span>');
+    }
+    if (!chips.length) return '';
+
+    return '<div class="ch-outcomes">' + chips.join('') +
+      (entry.inferred
+        ? '<span class="ch-inferred" title="These periods were recorded before per-period targets were stored, so today\'s target is used to judge them.">' +
+          'earlier targets assumed</span>'
+        : '') +
+      '</div>';
+  }
+
+  const OUTCOME_WORDS = {
+    met: 'met',
+    missed: 'missed',
+    exceeded: 'exceeded',
+    none: 'no target',
+    unknown: 'no record'
+  };
 
   function cellTitle(cell, entry) {
     const label = entry.unit === 'day'
@@ -157,7 +188,9 @@
         ? 'Week ' + cell.key.slice(5) + ' (' + U.formatDate(U.weekKeyToMonday(cell.key), 'short') + ')'
         : U.MONTHS[Number(cell.key.slice(5, 7)) - 1] + ' ' + cell.key.slice(0, 4);
     if (cell.value == null) return label + ' — no record';
-    return label + ' — ' + cell.value + (cell.target != null ? '/' + cell.target : '');
+    const pair = cell.value + (cell.target != null ? '/' + cell.target : '');
+    const word = cell.open ? 'in progress' : (OUTCOME_WORDS[cell.state] || '');
+    return label + ' — ' + pair + (word ? ', ' + word : '');
   }
 
   function counterTypeLabel(entry) {

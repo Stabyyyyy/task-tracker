@@ -190,22 +190,48 @@
       const currentKey = TT.Counters.periodKeyFor(c, new Date());
       const cells = keys.map((key) => {
         const isOpen = c.periodKey === key;
-        let value = null;
-        if (isOpen) value = c.value || 0;
-        else if (key in c.history) value = Number(c.history[key]);
+        const rec = c.periods && c.periods[key];
         const isFuture = key > currentKey;
+
+        // Precedence: the live period reads from the counter itself; a closed
+        // period prefers its stored record (which carries the target that was
+        // in force then); anything older falls back to the numeric ledger.
+        let value = null;
+        let target = c.target;
+        let outcome = null;
+
+        if (isOpen) {
+          value = c.value || 0;
+        } else if (rec) {
+          value = rec.value;
+          target = rec.target;
+          outcome = rec.outcome;
+        } else if (key in c.history) {
+          value = Number(c.history[key]);
+        }
+
         return {
           key,
           label: cellLabel(unit, key),
           value,
-          target: c.target,
+          target,
+          start: rec ? rec.start : null,
+          end: rec ? rec.end : null,
+          inferred: !!(rec && rec.inferred),
+          recorded: !!rec,
+          open: isOpen,
           future: isFuture,
-          state: isFuture ? 'future' : cellState(value, c.target)
+          state: isFuture ? 'future' : (outcome || cellState(value, target))
         };
       });
 
-      const known = cells.filter((x) => !x.future && x.value !== null);
+      // Outcome counts only cover *closed* periods — the open one has no final
+      // count yet, and calling a half-finished week "missed" would be wrong.
+      const known = cells.filter((x) => !x.future && !x.open && x.value !== null);
       const met = known.filter((x) => x.state === 'met' || x.state === 'exceeded').length;
+      const exceeded = known.filter((x) => x.state === 'exceeded').length;
+      const missed = known.filter((x) => x.state === 'missed').length;
+      const open = cells.find((x) => x.open) || null;
 
       return {
         task,
@@ -213,7 +239,11 @@
         unit,
         target: c.target,
         cells,
+        open,
         met,
+        missed,
+        exceeded,
+        inferred: known.some((x) => x.inferred),
         known: known.length,
         rate: known.length ? Math.round((met / known.length) * 100) : null
       };

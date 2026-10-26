@@ -32,9 +32,8 @@
   }
 
   function pillColor(task) {
-    const first = task.tagIds.map((id) => TT.Model.tagById(id)).filter(Boolean)[0];
-    if (!first) return 'slate';
-    const cat = TT.Model.categoryById(first.categoryId);
+    // Same rule as the list cards, so a task never changes colour between views.
+    const cat = TT.Model.primaryCategory(task);
     return cat ? cat.color : 'slate';
   }
 
