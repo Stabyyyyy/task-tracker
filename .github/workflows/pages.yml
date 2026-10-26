@@ -1,0 +1,46 @@
+name: Deploy to GitHub Pages
+
+# This workflow both enables Pages (configure-pages with enablement) and
+# publishes the site, so no manual Settings -> Pages step is required.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Enable Pages if needed
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # The site is plain static files at the repo root; drop git metadata
+      # before packaging so the artifact stays tiny.
+      - name: Trim git metadata
+        run: rm -rf .git
+
+      - name: Package site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
