@@ -310,6 +310,27 @@
     return applied;
   }
 
+  /**
+   * Remove exactly one star, without touching the main count, the target,
+   * progress or the daily ledger. The plain -1 deliberately leaves stars
+   * alone, so this is the explicit way to correct a mis-pressed special +1.
+   * Clamped at zero; no-op when there are no stars to remove.
+   */
+  function decrementStar(taskId) {
+    let removed = false;
+    TT.Store.commit((s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t || !t.counter) return;
+      const current = Number(t.counter.stars);
+      const safe = Number.isFinite(current) ? Math.max(0, Math.round(current)) : 0;
+      if (safe === 0) return;
+      t.counter.stars = safe - 1;
+      t.updatedAt = U.nowISO();
+      removed = true;
+    });
+    return removed;
+  }
+
   function setTarget(taskId, target) {
     let value = null;
     if (target !== null && target !== undefined && target !== '') {
@@ -339,6 +360,7 @@
     periodLabel,
     progress,
     increment,
+    decrementStar,
     setTarget
   };
 })(typeof window !== 'undefined' ? window : globalThis);

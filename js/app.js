@@ -220,6 +220,11 @@
       return true;
     }
 
+    if (action === 'counter-dec-star') {
+      TT.Counters.decrementStar(id);
+      return true;
+    }
+
     if (action === 'counter-dec') {
       TT.Counters.increment(id, -1);
       return true;

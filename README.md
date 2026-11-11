@@ -45,7 +45,7 @@ python -m http.server 8000
 | Cumulative | never | optional | 12 books this year |
 | Periodic | weekly or monthly | usually | guitar 3× this week |
 
-All have `+1` / `−1` and an extra **⭐ +1** (special). A normal `+1` adds one to the main count; the special one adds one to the main count *and* one to a separate cumulative **star** total shown as `⭐ 6` on the card. Stars never count toward the target, `−1` never removes a star, and the main count is clamped at zero. Hitting the target turns the card green, shows a "Goal met" badge, and cancels that period's reminder. Counter cards sit in a responsive grid (2–3 columns, one column on narrow screens, no horizontal scrolling).
+All have `+1` / `−1`, an extra **⭐ +1** (special) and a **⭐ −1** (minus star). A normal `+1` adds one to the main count; the special one adds one to the main count *and* one to a separate cumulative **star** total shown as `⭐ 6` on the card. The minus-star button removes exactly one star, clamped at zero, and leaves the main count, target and progress alone — it's the way to undo a mis-pressed special `+1`. The plain `−1` still never touches stars, stars never count toward the target, and the main count is clamped at zero. Hitting the target turns the card green, shows a "Goal met" badge, and cancels that period's reminder. Counter cards sit in a responsive grid (2–3 columns, one column on narrow screens, no horizontal scrolling).
 
 **Repeating tasks** — every N days / weeks / months, forever or until a date. Completing an instance keeps it as a record and generates exactly one successor. The successor inherits the pin and priority, and keeps the subtask checklist with every item reset to unchecked.
 
@@ -203,7 +203,7 @@ The nine v3 changes:
 1. **Pin** — click the pin on a one-time task, a counter and a repeat. Each moves into the **Pinned** group at the very top. Change sort/grouping; pinned stays first. Open Calendar — the pinned task has a pin mark but is still on its due date.
 2. **Title typography** — on any card, the title should be visibly the largest/heaviest text; nothing else changed size or moved.
 3. **Subtasks** — edit or create a plain task, add two subtasks in the editor, save. The card shows `0/2`. Check them in reverse order (no locking); after the second, the parent is complete. Uncheck one and it reopens. Open a counter's editor — there is no subtask section.
-4. **Stars** — on a counter, press normal `+1` (main +1, `⭐` unchanged), then `⭐ +1` (main +1 and `⭐` +1), then `−1` (main −1, `⭐` unchanged). Press `−1` at zero — it stays at 0. `⭐` never changes the target/progress.
+4. **Stars** — on a counter, press normal `+1` (main +1, `⭐` unchanged), `⭐ +1` (main +1 and `⭐` +1), `−1` (main −1, `⭐` unchanged), then `⭐ −1` (`⭐` −1, main unchanged). Press `⭐ −1` repeatedly at zero — it stays at 0. `⭐` never changes the target/progress.
 5. **Counter grid** — with 3+ counters, they should share 2–3 columns with no large blank area on the right. Narrow the window below ~760px: they stack into one column with no horizontal scrollbar.
 6. **Progress sort** — open the **Counter** tab; **Progress (asc/desc)** appears in Sort. Switch to **All tasks** — the option disappears and the previous sort is restored.
 7. **Type tabs** — click Counter / One-time / Recurring and confirm only that type shows; a recurring counter belongs to Counter, and a task with subtasks stays in its parent's tab. Category grouping still works under each tab.

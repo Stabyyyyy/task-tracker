@@ -2598,6 +2598,13 @@ select.input-sm {
   border-color: var(--border-strong);
 }
 
+/* The minus-star button is visually quieter than the add-star button: it
+   corrects a mistaken star, it isn't the primary action. */
+.round-btn.is-star-minus-btn {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
 .round-btn.is-star-btn .icon,
 .star-total .icon {
   width: 13px;

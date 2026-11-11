@@ -334,6 +334,9 @@
           '<button type="button" class="round-btn is-star-btn" data-action="counter-inc-star" data-id="' + task.id + '" ' +
             'aria-label="Special +1: also adds a star" title="+1 and a star (stars never affect the target)">' +
             icon('star') + '+1</button>' +
+          '<button type="button" class="round-btn is-star-btn is-star-minus-btn" data-action="counter-dec-star" data-id="' + task.id + '" ' +
+            'aria-label="Remove one star" title="Remove one star (main count and target are unchanged)">' +
+            icon('star') + '−1</button>' +
         '</div>' +
         '<div class="counter-foot-meta">' +
           '<span class="star-total" title="Cumulative stars — separate from the target">' + icon('star') +
