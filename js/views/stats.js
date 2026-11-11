@@ -11,9 +11,17 @@
 
   let granularity = 'week';
   let anchor = null;
+  // null means "follow the selected period": Week -> day, Month -> week,
+  // Year -> month. Once the user clicks an axis button it becomes explicit.
+  let chartAxis = null;
+  let chartMetric = 'completed';
 
   function ensureState() {
     if (!anchor) anchor = U.todayKey();
+  }
+
+  function activeAxis() {
+    return chartAxis || TT.Stats.defaultAxis(granularity);
   }
 
   function percent(n, d) {
@@ -27,6 +35,147 @@
       '<span class="stat-value">' + esc(value) + '</span>' +
       (sub ? '<span class="stat-sub">' + esc(sub) + '</span>' : '') +
     '</div>';
+  }
+
+  /* ------------------------------------------------------------ trend chart */
+
+  const CHART_W = 720;
+  const CHART_H = 220;
+  const PAD = { l: 42, r: 22, t: 14, b: 32 };
+
+  /**
+   * These metrics are whole numbers, so keep the ceiling even: the half-height
+   * grid line then always has an integer label instead of two rounded "1"s.
+   */
+  function niceMax(n) {
+    if (!n || n <= 2) return 2;
+    let m;
+    if (n <= 4) m = n;
+    else {
+      const step = Math.pow(10, Math.floor(Math.log10(n)));
+      m = Math.ceil(n / step) * step;
+    }
+    return m % 2 === 0 ? m : m + 1;
+  }
+
+  /** Display-only SVG. Colours come from CSS variables so both themes work. */
+  function trendSvg(series) {
+    if (!series.length) return '';
+    const w = CHART_W;
+    const h = CHART_H;
+    const innerW = w - PAD.l - PAD.r;
+    const innerH = h - PAD.t - PAD.b;
+    const base = PAD.t + innerH;
+    const max = niceMax(series.reduce((m, d) => Math.max(m, d.value), 0));
+    const n = series.length;
+    const step = n > 1 ? innerW / (n - 1) : 0;
+    const xOf = (i) => PAD.l + (n > 1 ? i * step : innerW / 2);
+    const yOf = (v) => base - (v / max) * innerH;
+
+    const grid = [0, 0.5, 1].map((f) => {
+      const y = base - f * innerH;
+      return '<line class="trend-grid" x1="' + PAD.l + '" y1="' + y + '" x2="' + (w - PAD.r) + '" y2="' + y + '"></line>' +
+        '<text class="trend-axis-text" x="' + (PAD.l - 8) + '" y="' + (y + 4) + '" text-anchor="end">' +
+          Math.round(max * f) + '</text>';
+    }).join('');
+
+    const pts = series.map((d, i) => xOf(i).toFixed(1) + ',' + yOf(d.value).toFixed(1));
+    const area = n > 1
+      ? '<polygon class="trend-area" points="' + PAD.l + ',' + base + ' ' + pts.join(' ') + ' ' +
+          xOf(n - 1).toFixed(1) + ',' + base + '"></polygon>'
+      : '';
+    const line = n > 1
+      ? '<polyline class="trend-line" points="' + pts.join(' ') + '"></polyline>'
+      : '';
+
+    const points = series.map((d, i) =>
+      '<circle class="trend-point" cx="' + xOf(i).toFixed(1) + '" cy="' + yOf(d.value).toFixed(1) + '" r="3.5">' +
+        '<title>' + esc(d.label + ': ' + d.value) + '</title></circle>'
+    ).join('');
+
+    const stride = Math.max(1, Math.ceil(n / 12));
+    const labels = series.map((d, i) => {
+      if (i % stride !== 0 && i !== n - 1) return '';
+      // Anchor the outermost labels inward so long month/date names never get
+      // clipped by the SVG viewBox edge.
+      const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+      return '<text class="trend-axis-text" x="' + xOf(i).toFixed(1) + '" y="' + (h - 10) + '" ' +
+        'text-anchor="' + anchor + '">' + esc(d.label) + '</text>';
+    }).join('');
+
+    return '<svg class="trend-svg" viewBox="0 0 ' + w + ' ' + h + '" role="img" ' +
+      'aria-label="Trend chart, ' + esc(String(n)) + ' points">' +
+      grid + area + line + points + labels +
+    '</svg>';
+  }
+
+  function segmented(action, pairs, current) {
+    return '<div class="segmented segmented-sm">' + pairs.map((pair) =>
+      '<button type="button" class="seg' + (current === pair[0] ? ' is-active' : '') + '" ' +
+      'data-action="' + action + '" data-value="' + pair[0] + '">' + pair[1] + '</button>'
+    ).join('') + '</div>';
+  }
+
+  function trendPanel(r, filter) {
+    const axis = activeAxis();
+    const series = TT.Stats.dailySeries(r, filter, axis, chartMetric);
+    const metricName = chartMetric === 'counters' ? 'Counter totals' : 'Tasks completed';
+    const axisName = axis === 'month' ? 'by month' : axis === 'week' ? 'by week' : 'by day';
+    const hasData = series.some((d) => d.value > 0);
+
+    return '<section class="panel trend-panel">' +
+      '<div class="panel-head">' +
+        '<h2>Trend</h2>' +
+        '<span class="hint">' + esc(metricName + ' · ' + axisName + ' · ' + r.label) + '</span>' +
+      '</div>' +
+      '<div class="trend-controls">' +
+        '<div class="trend-control-row">' +
+          '<span class="view-opt-label">Metric</span>' +
+          segmented('set-chart-metric', [['completed', 'Tasks completed'], ['counters', 'Counter totals']], chartMetric) +
+        '</div>' +
+        '<div class="trend-control-row">' +
+          '<span class="view-opt-label">Time axis</span>' +
+          segmented('set-chart-axis', [['day', 'By day'], ['week', 'By week'], ['month', 'By month']], axis) +
+        '</div>' +
+      '</div>' +
+      '<div class="trend-chart">' + trendSvg(series) + '</div>' +
+      '<p class="hint trend-hint">' +
+        (hasData
+          ? 'Daily records are written as you complete tasks or change counters. Days with no recorded value read as 0; nothing is backfilled.'
+          : 'No daily records in this period yet. Complete a task or use a counter to start the trend — old data starts empty, no history is invented.') +
+      '</p>' +
+    '</section>';
+  }
+
+  /**
+   * The period's counter aggregate, explicitly labelled so a sum of daily
+   * finals is never mistaken for the net change over the period.
+   */
+  function dailyCounterPanel(r, filter) {
+    const data = TT.Stats.dailyCounterSummary(r, filter);
+    return '<section class="panel">' +
+      '<div class="panel-head">' +
+        '<h2>Counter daily totals</h2>' +
+        '<span class="hint">' + esc(r.label) + '</span>' +
+      '</div>' +
+      '<p class="panel-note"><strong>Σ daily final counts — not net change.</strong> ' +
+        'For each counter we add up that day\'s final main count (net of +1/−1) over every day with a record. ' +
+        'Days with no recorded value contribute nothing; stars are excluded.</p>' +
+      (data.rows.length
+        ? '<table class="data-table">' +
+            '<thead><tr><th>Counter</th><th class="num">Σ daily finals</th><th class="num">Days recorded</th></tr></thead>' +
+            '<tbody>' + data.rows.map((row) =>
+              '<tr><td>' + esc(row.task.title) + '</td>' +
+                '<td class="num">' + row.value + '</td>' +
+                '<td class="num">' + row.days + '</td></tr>'
+            ).join('') +
+            '<tr class="table-total"><td><strong>Total</strong></td>' +
+              '<td class="num"><strong>' + data.total + '</strong></td>' +
+              '<td class="num">' + data.days + '</td></tr>' +
+            '</tbody>' +
+          '</table>'
+        : '<p class="hint">No counter values recorded on any day in this period.</p>') +
+    '</section>';
   }
 
   function render(container) {
@@ -76,6 +225,8 @@
           summary.slipped ? 'warn' : '') +
       '</div>' +
 
+      trendPanel(r, filter) +
+
       '<section class="panel">' +
         '<div class="panel-head">' +
           '<h2>Breakdown by tag</h2>' +
@@ -109,7 +260,9 @@
         (counters.length
           ? '<div class="counter-history">' + counters.map(counterBlock).join('') + '</div>'
           : '<p class="hint">No counters yet. Create one with the “Counter” task type.</p>') +
-      '</section>';
+      '</section>' +
+
+      dailyCounterPanel(r, filter);
   }
 
   function counterBlock(entry) {
@@ -202,6 +355,18 @@
   function onAction(action, el) {
     if (action === 'set-granularity') {
       granularity = el.getAttribute('data-value');
+      // The default axis follows the period, so a period change re-defaults it.
+      chartAxis = null;
+      TT.App.render();
+      return true;
+    }
+    if (action === 'set-chart-metric') {
+      chartMetric = el.getAttribute('data-value');
+      TT.App.render();
+      return true;
+    }
+    if (action === 'set-chart-axis') {
+      chartAxis = el.getAttribute('data-value');
       TT.App.render();
       return true;
     }

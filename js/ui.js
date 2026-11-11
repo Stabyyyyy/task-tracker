@@ -35,6 +35,8 @@
     filter: '<path d="M2.6 4.2h10.8M4.6 8h6.8M6.6 11.8h2.8"/>',
     target: '<circle cx="8" cy="8" r="5.2"/><circle cx="8" cy="8" r="1.7"/>',
     tag: '<path d="M2.6 8.4V2.6h5.8l5 5-5 5z"/><circle cx="5.4" cy="5.4" r=".9"/>',
+    pin: '<path d="M9.8 1.8l4.4 4.4-2.1.5-1.6 3.1-2.5-2.5-3.6 5.1M6.2 6.2l3.6-3.6M5.4 10.6L2.4 13.6"/>',
+    star: '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>',
     dots: '<circle cx="3.4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.6" cy="8" r="1"/>'
   };
 
@@ -167,6 +169,53 @@
     return '<span class="badge badge-' + kind + '">' + (iconName ? icon(iconName) : '') + esc(text) + '</span>';
   }
 
+  /** No priority -> no badge at all; the "No priority" bucket names it instead. */
+  function priorityPill(task) {
+    const p = TT.Model.priorityById(task.priorityId);
+    if (!p) return '';
+    return '<span class="pill priority-pill cat-' + p.color + '" title="Priority: ' + esc(p.name) + '">' +
+      esc(p.name) + '</span>';
+  }
+
+  function pinButton(task) {
+    const on = !!task.pinned;
+    return '<button type="button" class="icon-btn pin-btn' + (on ? ' is-on' : '') + '" ' +
+      'data-action="toggle-pin" data-id="' + task.id + '" ' +
+      'aria-pressed="' + (on ? 'true' : 'false') + '" ' +
+      'aria-label="' + (on ? 'Unpin task' : 'Pin task') + '" ' +
+      'title="' + (on ? 'Unpin' : 'Pin to the top') + '">' + icon('pin') + '</button>';
+  }
+
+  function subtaskCount(task) {
+    const subs = task.subtasks || [];
+    if (!subs.length) return null;
+    return { done: subs.filter((s) => s.completed).length, total: subs.length };
+  }
+
+  function subtaskHtml(task) {
+    const subs = (task.subtasks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    if (!subs.length) return '';
+
+    return '<div class="subtasks">' +
+      '<div class="subtask-list">' + subs.map((sub) =>
+        '<div class="subtask' + (sub.completed ? ' is-done' : '') + '">' +
+          '<button type="button" class="subtask-check' + (sub.completed ? ' is-on' : '') + '" ' +
+            'data-action="toggle-subtask" data-id="' + task.id + '" data-sub="' + esc(sub.id) + '" ' +
+            'aria-label="' + (sub.completed ? 'Uncheck ' : 'Check ') + esc(sub.name) + '">' + icon('check') + '</button>' +
+          '<div class="subtask-text">' +
+            '<span class="subtask-name">' + esc(sub.name) + '</span>' +
+            (sub.date || sub.notes
+              ? '<span class="subtask-meta">' +
+                  (sub.date ? '<span>' + icon('calendar') + esc(U.formatDate(sub.date, 'medium')) + '</span>' : '') +
+                  (sub.notes ? '<span>' + esc(sub.notes) + '</span>' : '') +
+                '</span>'
+              : '') +
+          '</div>' +
+        '</div>'
+      ).join('') + '</div>' +
+    '</div>';
+  }
+
   function emptyState(opts) {
     return '<div class="empty">' +
       '<div class="empty-mark">' + icon(opts.icon || 'check') + '</div>' +
@@ -201,12 +250,17 @@
     if (task.notes) {
       meta.push('<span class="meta-item is-quiet">' + icon('list') + esc(task.notes.length > 60 ? task.notes.slice(0, 60) + '…' : task.notes) + '</span>');
     }
+    const subCount = subtaskCount(task);
+    if (subCount) {
+      meta.push('<span class="meta-item subtask-progress">' + icon('list') +
+        subCount.done + '/' + subCount.total + ' subtasks done</span>');
+    }
 
-    const actions = o.context === 'archive'
+    const actions = pinButton(task) + (o.context === 'archive'
       ? '<button type="button" class="icon-btn" data-action="restore-task" data-id="' + task.id + '" aria-label="Restore">' + icon('restore') + '</button>' +
         '<button type="button" class="icon-btn is-danger" data-action="delete-task" data-id="' + task.id + '" aria-label="Delete permanently">' + icon('trash') + '</button>'
       : '<button type="button" class="icon-btn" data-action="edit-task" data-id="' + task.id + '" aria-label="Edit">' + icon('pencil') + '</button>' +
-        '<button type="button" class="icon-btn" data-action="archive-task" data-id="' + task.id + '" aria-label="Archive">' + icon('archive') + '</button>';
+        '<button type="button" class="icon-btn" data-action="archive-task" data-id="' + task.id + '" aria-label="Archive">' + icon('archive') + '</button>');
 
     const checkEl = o.context === 'archive'
       ? '<span class="check is-static' + (done ? ' is-on' : '') + '" aria-hidden="true">' + icon('check') + '</span>'
@@ -222,12 +276,15 @@
       checkEl +
       '<div class="task-main">' +
         '<div class="task-title-row">' +
+          (task.pinned ? '<span class="pin-mark" title="Pinned">' + icon('pin') + '</span>' : '') +
           '<span class="task-title">' + esc(task.title) + '</span>' +
           (overdue ? badge('Overdue', 'overdue') : '') +
           (task.kind === 'recurring' ? badge('Repeats', 'repeat', 'repeat') : '') +
+          priorityPill(task) +
         '</div>' +
         (meta.length ? '<div class="task-meta">' + meta.join('') + '</div>' : '') +
         (tags.length ? '<div class="task-tags">' + tags.map((t) => tagPill(t)).join('') + '</div>' : '') +
+        subtaskHtml(task) +
       '</div>' +
       '<div class="task-actions">' + actions + '</div>' +
     '</article>';
@@ -245,7 +302,11 @@
     return '<article class="counter-card' + (p.met ? ' is-met' : '') + catClass + '" data-task-id="' + task.id + '">' +
       '<header class="counter-head">' +
         '<div class="counter-title-wrap">' +
-          '<h3 class="counter-title">' + esc(task.title) + '</h3>' +
+          '<div class="counter-title-row">' +
+            (task.pinned ? '<span class="pin-mark" title="Pinned">' + icon('pin') + '</span>' : '') +
+            '<h3 class="counter-title">' + esc(task.title) + '</h3>' +
+            priorityPill(task) +
+          '</div>' +
           '<div class="counter-sub">' + icon(c.type === 'cumulative' ? 'chart' : 'target') + esc(p.periodLabel) + ' · ' + esc(typeLabel) + '</div>' +
           (tags.length
             ? '<div class="task-tags counter-tags">' + tags.map((t) => tagPill(t)).join('') + '</div>'
@@ -270,9 +331,15 @@
         '<div class="counter-buttons">' +
           '<button type="button" class="round-btn" data-action="counter-dec" data-id="' + task.id + '" aria-label="Decrease by one">−</button>' +
           '<button type="button" class="round-btn is-primary" data-action="counter-inc" data-id="' + task.id + '" aria-label="Increase by one">+</button>' +
+          '<button type="button" class="round-btn is-star-btn" data-action="counter-inc-star" data-id="' + task.id + '" ' +
+            'aria-label="Special +1: also adds a star" title="+1 and a star (stars never affect the target)">' +
+            icon('star') + '+1</button>' +
         '</div>' +
         '<div class="counter-foot-meta">' +
+          '<span class="star-total" title="Cumulative stars — separate from the target">' + icon('star') +
+            '<span class="star-count">' + (Number(c.stars) || 0) + '</span></span>' +
           (remindOn ? '<span class="meta-item is-quiet">' + icon('bell') + esc(U.formatTime12(task.reminders.counterTime)) + '</span>' : '') +
+          pinButton(task) +
           '<button type="button" class="icon-btn" data-action="edit-task" data-id="' + task.id + '" aria-label="Edit counter">' + icon('pencil') + '</button>' +
           '<button type="button" class="icon-btn" data-action="archive-task" data-id="' + task.id + '" aria-label="Archive counter">' + icon('archive') + '</button>' +
         '</div>' +
@@ -303,6 +370,9 @@
         onDue: false,
         onRecurrence: false,
         counterTime: '',
+        priorityId: d.priorityId || '',
+        pinned: !!d.pinned,
+        subtasks: [],
         seriesId: null
       };
     }
@@ -324,6 +394,17 @@
       onDue: !!(task.reminders && task.reminders.onDue),
       onRecurrence: !!(task.reminders && task.reminders.onRecurrence),
       counterTime: (task.reminders && task.reminders.counterTime) || '',
+      priorityId: task.priorityId || '',
+      pinned: !!task.pinned,
+      subtasks: (task.subtasks || []).map((s, i) => ({
+        id: s.id,
+        name: s.name || '',
+        date: s.date || '',
+        notes: s.notes || '',
+        completed: !!s.completed,
+        completedAt: s.completedAt || null,
+        order: Number.isFinite(Number(s.order)) ? Number(s.order) : i
+      })),
       seriesId: (task.recurrence && task.recurrence.seriesId) || null
     };
   }
@@ -477,6 +558,42 @@
     '</div>';
   }
 
+  function priorityField(draft) {
+    const rows = TT.Model.prioritiesSorted().map((p) =>
+      '<option value="' + p.id + '"' + (draft.priorityId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>'
+    ).join('');
+    return '<div class="field">' +
+      '<label class="field-label" for="tt-priority">Priority <span class="opt">optional</span></label>' +
+      '<select id="tt-priority" class="input input-sm" data-field="priorityId">' +
+        '<option value=""' + (!draft.priorityId ? ' selected' : '') + '>No priority</option>' + rows +
+      '</select>' +
+      '<p class="hint">Independent of tags. Create or recolour labels in Settings.</p>' +
+    '</div>';
+  }
+
+  /** Counter tasks never get subtasks, so this field is omitted for them. */
+  function subtaskBlock(draft) {
+    if (draft.kind === 'counter') return '';
+    const subs = draft.subtasks || [];
+    return '<div class="field">' +
+      '<span class="field-label">Subtasks <span class="opt">optional</span></span>' +
+      '<p class="hint">Check them in any order. The task completes when the last one is checked.</p>' +
+      '<div class="subtask-editor">' + subs.map((s) =>
+        '<div class="subtask-editor-row">' +
+          '<input type="text" class="input input-sm" data-sub-field="name" data-sub-id="' + esc(s.id) + '" ' +
+            'value="' + esc(s.name) + '" placeholder="Subtask name" aria-label="Subtask name">' +
+          '<input type="date" class="input input-date" data-sub-field="date" data-sub-id="' + esc(s.id) + '" ' +
+            'value="' + esc(s.date || '') + '" aria-label="Subtask date">' +
+          '<input type="text" class="input input-sm" data-sub-field="notes" data-sub-id="' + esc(s.id) + '" ' +
+            'value="' + esc(s.notes || '') + '" placeholder="Notes" aria-label="Subtask notes">' +
+          '<button type="button" class="icon-btn" data-sub-remove="' + esc(s.id) + '" aria-label="Remove subtask">' +
+            icon('x') + '</button>' +
+        '</div>'
+      ).join('') + '</div>' +
+      '<button type="button" class="mini-btn" data-sub-add>+ Add subtask</button>' +
+    '</div>';
+  }
+
   function dynamicHtml(draft) {
     const parts = [];
 
@@ -494,7 +611,9 @@
     if (draft.kind === 'recurring') parts.push(recurrenceBlock(draft));
     if (draft.kind === 'counter') parts.push(counterBlock(draft));
     parts.push(reminderBlock(draft));
+    parts.push(priorityField(draft));
     parts.push(tagBlock(draft));
+    parts.push(subtaskBlock(draft));
 
     return parts.join('');
   }
@@ -523,7 +642,18 @@
         onDue: draft.onDue,
         onRecurrence: draft.onRecurrence,
         counterTime: draft.counterTime || null
-      }
+      },
+      priorityId: draft.priorityId || null,
+      pinned: !!draft.pinned,
+      subtasks: (draft.subtasks || []).map((s, i) => ({
+        id: s.id,
+        name: s.name,
+        date: s.date || null,
+        notes: s.notes || '',
+        completed: !!s.completed,
+        completedAt: s.completedAt || null,
+        order: Number.isFinite(Number(s.order)) ? Number(s.order) : i
+      }))
     };
   }
 
@@ -568,7 +698,18 @@
       if (el) el.textContent = forecastText(draft);
     }
 
+    /** Keep subtask rows in the draft so a paint() never loses typed text. */
+    function syncSubField(el) {
+      const id = el.getAttribute('data-sub-id');
+      const field = el.getAttribute('data-sub-field');
+      if (!id || !field) return false;
+      const row = (draft.subtasks || []).find((s) => s.id === id);
+      if (row) row[field] = el.value;
+      return true;
+    }
+
     m.body.addEventListener('input', (e) => {
+      if (syncSubField(e.target)) return;
       const field = e.target.getAttribute('data-field');
       if (!field) return;
       if (e.target.type === 'checkbox') draft[field] = e.target.checked;
@@ -580,6 +721,7 @@
     });
 
     m.body.addEventListener('change', (e) => {
+      if (syncSubField(e.target)) return;
       const field = e.target.getAttribute('data-field');
       if (!field) return;
       if (e.target.type === 'checkbox') draft[field] = e.target.checked;
@@ -593,6 +735,33 @@
     });
 
     m.body.addEventListener('click', (e) => {
+      const addSub = e.target.closest('[data-sub-add]');
+      if (addSub) {
+        draft.subtasks = draft.subtasks || [];
+        draft.subtasks.push({
+          id: U.uid('sub'),
+          name: '',
+          date: '',
+          notes: '',
+          completed: false,
+          completedAt: null,
+          order: draft.subtasks.length
+        });
+        paint();
+        const rows = dyn.querySelectorAll('.subtask-editor-row');
+        const last = rows[rows.length - 1];
+        if (last) last.querySelector('[data-sub-field="name"]').focus();
+        return;
+      }
+
+      const removeSub = e.target.closest('[data-sub-remove]');
+      if (removeSub) {
+        const id = removeSub.getAttribute('data-sub-remove');
+        draft.subtasks = (draft.subtasks || []).filter((s) => s.id !== id);
+        paint();
+        return;
+      }
+
       const kindBtn = e.target.closest('[data-kind]');
       if (kindBtn) {
         draft.kind = kindBtn.getAttribute('data-kind');

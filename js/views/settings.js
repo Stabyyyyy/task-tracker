@@ -71,6 +71,8 @@
 
         tagsSection(s) +
 
+        prioritiesSection(s) +
+
         dataSection(s) +
 
       '</div>';
@@ -131,6 +133,117 @@
           '</div>'
         : '') +
     '</section>';
+  }
+
+  /**
+   * Priority labels are a separate dimension from tags: custom name, numeric
+   * level (ordering) and colour. Deleting one is always allowed.
+   */
+  function prioritiesSection(s) {
+    const list = TT.Model.prioritiesSorted();
+    const rows = list.map((p) => {
+      const used = TT.Model.priorityUsage(p.id);
+      return '<div class="manage-row pri-row">' +
+        '<i class="dot cat-' + p.color + '"></i>' +
+        '<span class="manage-name">' + esc(p.name) + '</span>' +
+        '<span class="hint">level ' + p.level + ' · ' + used + ' ' + U.plural(used, 'task') + '</span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="icon-btn" data-action="pri-up" data-id="' + p.id + '" aria-label="Move up">↑</button>' +
+        '<button type="button" class="icon-btn" data-action="pri-down" data-id="' + p.id + '" aria-label="Move down">↓</button>' +
+        '<button type="button" class="icon-btn" data-action="edit-priority" data-id="' + p.id + '" aria-label="Edit priority">' + UI.icon('pencil') + '</button>' +
+        '<button type="button" class="icon-btn is-danger" data-action="delete-priority" data-id="' + p.id + '" aria-label="Delete priority">' + UI.icon('trash') + '</button>' +
+      '</div>';
+    }).join('');
+
+    const colorOptions = TT.Store.CATEGORY_COLORS.map((c) =>
+      '<option value="' + c + '">' + c.charAt(0).toUpperCase() + c.slice(1) + '</option>'
+    ).join('');
+
+    return '<section class="panel panel-wide">' +
+      '<div class="panel-head"><h2>Priorities</h2><span class="hint">Separate from tags · tasks may have none</span></div>' +
+      (list.length
+        ? '<div class="pri-list">' + rows + '</div>'
+        : '<p class="hint">No priority labels yet. Add one below, or leave tasks on “No priority”.</p>') +
+      '<div class="inline-form">' +
+        '<input type="text" id="new-pri-name" class="input input-sm" placeholder="New priority name">' +
+        '<select id="new-pri-color" class="input input-sm">' + colorOptions + '</select>' +
+        '<button type="button" class="btn btn-ghost" data-action="add-priority">' + UI.icon('plus') + 'Add priority</button>' +
+      '</div>' +
+      '<p class="hint">Renaming updates every task using it. Deleting moves those tasks to “No priority” — nothing is blocked.</p>' +
+    '</section>';
+  }
+
+  function promptPriority(p) {
+    const swatches = TT.Store.CATEGORY_COLORS.map((c) =>
+      '<label class="swatch cat-' + c + (p.color === c ? ' is-on' : '') + '" title="' + c + '">' +
+        '<input type="radio" name="pri-color" value="' + c + '"' + (p.color === c ? ' checked' : '') + '>' +
+        '<span class="swatch-dot"></span>' +
+      '</label>'
+    ).join('');
+
+    return new Promise((resolve) => {
+      let answered = false;
+      const m = UI.modal({
+        title: 'Edit priority',
+        size: 'sm',
+        body: '<div class="field">' +
+            '<label class="field-label" for="prompt-input">Name</label>' +
+            '<input id="prompt-input" class="input" value="' + esc(p.name) + '">' +
+          '</div>' +
+          '<div class="field">' +
+            '<label class="field-label" for="pri-level">Level <span class="opt">lower sorts first</span></label>' +
+            '<input id="pri-level" type="number" class="input input-sm" value="' + p.level + '">' +
+          '</div>' +
+          '<div class="field">' +
+            '<span class="field-label">Colour</span>' +
+            '<div class="swatch-row">' + swatches + '</div>' +
+          '</div>',
+        footer: '<span class="spacer"></span>' +
+          '<button type="button" class="btn btn-ghost" data-close>Cancel</button>' +
+          '<button type="button" class="btn btn-primary" data-ok>Save</button>',
+        onClose: () => {
+          if (!answered) resolve(null);
+        }
+      });
+
+      const input = m.body.querySelector('#prompt-input');
+      input.select();
+      m.body.querySelectorAll('input[name="pri-color"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          m.body.querySelectorAll('.swatch').forEach((s) => s.classList.remove('is-on'));
+          radio.closest('.swatch').classList.add('is-on');
+        });
+      });
+
+      function ok() {
+        answered = true;
+        const checked = m.body.querySelector('input[name="pri-color"]:checked');
+        const levelInput = m.body.querySelector('#pri-level');
+        const level = Number(levelInput.value);
+        const patch = {
+          name: input.value.trim() || p.name,
+          color: checked ? checked.value : p.color,
+          level: Number.isFinite(level) ? level : p.level
+        };
+        m.close();
+        resolve(patch);
+      }
+      m.footer.querySelector('[data-ok]').addEventListener('click', ok);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') ok();
+      });
+    });
+  }
+
+  function movePriority(id, dir) {
+    const ids = TT.Model.prioritiesSorted().map((p) => p.id);
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    const swap = ids[i];
+    ids[i] = ids[j];
+    ids[j] = swap;
+    TT.Model.reorderPriorities(ids);
   }
 
   function dataSection(s) {
@@ -455,6 +568,55 @@
         TT.Model.deleteTag(tag.id);
         UI.toast('Tag deleted', 'success');
       });
+      return true;
+    }
+
+    if (action === 'add-priority') {
+      const input = root.querySelector('#new-pri-name');
+      const color = root.querySelector('#new-pri-color');
+      const name = input ? input.value.trim() : '';
+      if (!name) {
+        UI.toast('Give the priority a name first.', 'error');
+        if (input) input.focus();
+        return true;
+      }
+      TT.Model.addPriority(name, color ? color.value : 'slate');
+      UI.toast('Priority added', 'success');
+      return true;
+    }
+
+    if (action === 'edit-priority') {
+      const p = TT.Model.priorityById(el.getAttribute('data-id'));
+      if (!p) return true;
+      promptPriority(p).then((patch) => {
+        if (!patch) return;
+        TT.Model.updatePriority(p.id, patch);
+        UI.toast('Priority updated', 'success');
+      });
+      return true;
+    }
+
+    if (action === 'delete-priority') {
+      const p = TT.Model.priorityById(el.getAttribute('data-id'));
+      if (!p) return true;
+      const used = TT.Model.priorityUsage(p.id);
+      UI.confirmDialog({
+        title: 'Delete “' + esc(p.name) + '”?',
+        message: used
+          ? used + ' ' + U.plural(used, 'task') + ' will move to “No priority”.'
+          : 'Nothing is using this priority yet.',
+        confirmText: 'Delete priority',
+        danger: true
+      }).then((ok) => {
+        if (!ok) return;
+        TT.Model.deletePriority(p.id);
+        UI.toast('Priority deleted — tasks set to No priority', 'success');
+      });
+      return true;
+    }
+
+    if (action === 'pri-up' || action === 'pri-down') {
+      movePriority(el.getAttribute('data-id'), action === 'pri-up' ? -1 : 1);
       return true;
     }
 

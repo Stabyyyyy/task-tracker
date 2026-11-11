@@ -250,14 +250,147 @@
     });
   }
 
+  /* ------------------------------------------------------- v3 daily ledger */
+
+  const TREND_AXES = ['day', 'week', 'month'];
+  const TREND_METRICS = ['completed', 'counters'];
+
+  /** The chart's default axis follows the selected stats period. */
+  function defaultAxis(granularity) {
+    if (granularity === 'year') return 'month';
+    if (granularity === 'month') return 'week';
+    return 'day';
+  }
+
+  function axisUnit(axis) {
+    return TREND_AXES.indexOf(axis) >= 0 ? axis : 'day';
+  }
+
+  function bucketKey(day, axis) {
+    if (axis === 'week') return U.isoWeekKey(day);
+    if (axis === 'month') return U.monthKey(day);
+    return day;
+  }
+
+  function bucketLabel(key, axis) {
+    if (axis === 'month') return U.MONTHS_SHORT[Number(key.slice(5, 7)) - 1];
+    if (axis === 'week') return 'W' + key.slice(6);
+    const d = U.parseKey(key);
+    return d.getDate() + ' ' + U.MONTHS_SHORT[d.getMonth()];
+  }
+
+  function bucketRange(key, axis) {
+    if (axis === 'month') return { from: key + '-01', to: U.lastDayOfMonthKey(key) };
+    if (axis === 'week') {
+      const monday = U.weekKeyToMonday(key);
+      return { from: monday, to: U.addDays(monday, 6) };
+    }
+    return { from: key, to: key };
+  }
+
+  /**
+   * Counters in scope for the tag/category filter. Priority is never read
+   * here: the review page has no priority breakdown and no priority trend.
+   */
+  function dailyCounterIds(filter) {
+    return filtered(filter).filter((t) => t.kind === 'counter');
+  }
+
+  function dailyValue(rec, metric, counterIds) {
+    if (!rec || typeof rec !== 'object') return 0;
+    if (metric === 'counters') {
+      let sum = 0;
+      const counters = rec.counters || {};
+      Object.keys(counters).forEach((id) => {
+        if (counterIds.has(id)) sum += Math.max(0, Number(counters[id]) || 0);
+      });
+      return sum;
+    }
+    return Math.max(0, Math.round(Number(rec.completed) || 0));
+  }
+
+  /**
+   * Bucketed series over state.daily for [r.from, r.to]. Empty buckets are
+   * still emitted (as 0) so the x-axis stays continuous, but no history is
+   * invented: a day with no recorded entry simply reads as zero.
+   */
+  function dailySeries(r, filter, axis, metric) {
+    const unit = axisUnit(axis);
+    const m = TREND_METRICS.indexOf(metric) >= 0 ? metric : 'completed';
+    const counterIds = new Set(dailyCounterIds(filter).map((t) => t.id));
+    const keys = U.periodKeysInRange(unit, r.from, r.to);
+    const values = {};
+    keys.forEach((k) => { values[k] = 0; });
+
+    const daily = TT.Store.get().daily || {};
+    Object.keys(daily).forEach((day) => {
+      if (!U.isDateKey(day) || day < r.from || day > r.to) return;
+      const bk = bucketKey(day, unit);
+      if (!(bk in values)) return;
+      values[bk] += dailyValue(daily[day], m, counterIds);
+    });
+
+    return keys.map((key) => {
+      const bounds = bucketRange(key, unit);
+      return {
+        key,
+        label: bucketLabel(key, unit),
+        value: values[key],
+        from: bounds.from < r.from ? r.from : bounds.from,
+        to: bounds.to > r.to ? r.to : bounds.to
+      };
+    });
+  }
+
+  /**
+   * Σ of each day's FINAL counter count over the period, per counter.
+   * Deliberately not a net change: a daily counter sitting at 8 on three days
+   * contributes 24, not 8. Only days with a recorded value are summed.
+   */
+  function dailyCounterSummary(r, filter) {
+    const daily = TT.Store.get().daily || {};
+    const inScope = dailyCounterIds(filter);
+    const byId = {};
+    inScope.forEach((t) => { byId[t.id] = { task: t, value: 0, days: 0 }; });
+    let days = 0;
+
+    Object.keys(daily).forEach((day) => {
+      if (!U.isDateKey(day) || day < r.from || day > r.to) return;
+      const rec = daily[day];
+      if (!rec || typeof rec !== 'object') return;
+      days++;
+      const counters = rec.counters || {};
+      Object.keys(counters).forEach((id) => {
+        if (!byId[id]) return;
+        const n = Number(counters[id]);
+        if (!Number.isFinite(n)) return;
+        byId[id].value += Math.max(0, Math.round(n));
+        byId[id].days++;
+      });
+    });
+
+    const rows = inScope.map((t) => byId[t.id]).filter((row) => row.days > 0);
+    rows.sort((a, b) => (b.value - a.value) || a.task.title.localeCompare(b.task.title));
+    return {
+      rows,
+      days,
+      total: rows.reduce((n, row) => n + row.value, 0)
+    };
+  }
+
   TT.Stats = {
     GRANULARITIES,
+    TREND_AXES,
+    TREND_METRICS,
+    defaultAxis,
     range,
     shift,
     inRange,
     summary,
     tagBreakdown,
     counterSeries,
+    dailySeries,
+    dailyCounterSummary,
     cellState,
     cellLabel,
     filtered

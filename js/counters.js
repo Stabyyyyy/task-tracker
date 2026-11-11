@@ -36,6 +36,9 @@
       // inferred }. `history` stays the numeric ledger; this map only adds the
       // target that was in force when the period closed, plus its outcome.
       periods: {},
+      // Cumulative "quality" count. Never decremented and never part of the
+      // target — the special +1 button adds one here and one to the main count.
+      stars: 0,
       log: []
     };
   }
@@ -142,12 +145,39 @@
   function reconcileAll(now) {
     const date = now || new Date();
     let changed = false;
+    const closed = [];
+
     TT.Store.get().tasks.forEach((t) => {
-      if (t.kind === 'counter' && t.counter && reconcile(t.counter, date)) changed = true;
+      if (t.kind !== 'counter' || !t.counter) return;
+      const closing = t.counter.periodKey;
+      if (!reconcile(t.counter, date)) return;
+      changed = true;
+
+      // A real boundary, not the first-time initialisation (periodKey null),
+      // and only for daily counters: their closing key IS a calendar day, so
+      // it maps directly onto a daily ledger entry. Weekly/monthly keys span
+      // several days and cannot be attributed to one day without inventing
+      // values for days the app was closed.
+      if (closing && closing !== t.counter.periodKey &&
+          t.counter.type === 'daily' && TT.Daily && TT.Daily.validKey(closing)) {
+        const raw = Number(t.counter.history[closing]);
+        closed.push({
+          id: t.id,
+          day: closing,
+          value: Number.isFinite(raw) ? Math.max(0, raw) : 0
+        });
+      }
     });
+
     // Only commit when something actually rolled over, so the 30s scheduler
-    // tick doesn't force a re-render on every pass.
-    if (changed) TT.Store.commit(() => {});
+    // tick doesn't force a re-render on every pass. Finalising the day that
+    // just closed rides along in the same commit.
+    if (changed) {
+      TT.Store.commit((s) => {
+        if (!TT.Daily) return;
+        closed.forEach((c) => TT.Daily.setCounterIfMissing(s, c.day, c.id, c.value));
+      });
+    }
     return changed;
   }
 
@@ -222,9 +252,14 @@
   /**
    * Apply +1 / -1. Reconciles first so a click at 00:00:30 lands in the new
    * period rather than the old one.
+   *
+   * opts.star marks the special +1: it counts once for the main counter and
+   * once for the cumulative star total. -1 never touches stars, and the main
+   * counter is already clamped at zero above.
    */
-  function increment(taskId, delta, now) {
+  function increment(taskId, delta, now, opts) {
     const date = now || new Date();
+    const star = !!(opts && opts.star);
     let applied = 0;
     let becameMet = false;
 
@@ -249,6 +284,19 @@
         c.value = next;
         c.history[key] = next;
         pushLog(c, applied, key, date);
+      }
+
+      if (star && delta > 0 && applied > 0) {
+        const currentStars = Number(c.stars);
+        c.stars = (Number.isFinite(currentStars) ? currentStars : 0) + 1;
+      }
+
+      // Last write of the day wins, so this ends up as that day's final count.
+      // Cumulative counters have no daily reset, so their running total is the
+      // value recorded for the day.
+      if (TT.Daily) {
+        const final = c.type === 'cumulative' ? total(c) : (c.value || 0);
+        TT.Daily.setCounter(s, U.dateKey(date), t.id, final);
       }
 
       t.updatedAt = U.nowISO();

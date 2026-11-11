@@ -760,10 +760,12 @@ select.input-sm {
   gap: 8px;
 }
 
+/* Counter cards are wrapped in .counter-grid by the list renderer, so the
+   group body stays a simple vertical stack of those wrappers. */
 .group-counters .group-body {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* A counter sitting inside a category group would otherwise stretch the full
@@ -875,9 +877,10 @@ select.input-sm {
 }
 
 .task-title {
-  font-size: 14.5px;
-  font-weight: 520;
-  letter-spacing: -0.005em;
+  /* Change 2: only the title's typography — no layout or other sizes. */
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -0.012em;
   overflow-wrap: anywhere;
 }
 
@@ -1019,9 +1022,16 @@ select.input-sm {
 }
 
 .counter-title {
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: -0.005em;
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+}
+
+.counter-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
 }
 
 .counter-sub {
@@ -1119,11 +1129,15 @@ select.input-sm {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  /* v3 adds a star button and star total; let the footer wrap instead of
+     overflowing a narrow grid column. */
+  flex-wrap: wrap;
 }
 
 .counter-buttons {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .round-btn {
@@ -1170,7 +1184,8 @@ select.input-sm {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  flex-wrap: wrap;
+  overflow: visible;
 }
 
 /* ---------------------------------------------------------------- calendar */
@@ -2381,5 +2396,337 @@ select.input-sm {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   v3 — type tabs, pins, priorities, subtasks, stars, counter grid, trend
+   ========================================================================== */
+
+/* Type tabs live inside the Tasks view, above the toolbar and filter bar. */
+.type-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.type-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.type-tab:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.type-tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* Pins */
+.pin-btn.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pin-mark,
+.group-pin {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.pin-mark .icon,
+.group-pin .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.cal-pin {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: 3px;
+}
+
+.cal-pin .icon {
+  width: 9px;
+  height: 9px;
+}
+
+.cal-pill.is-pinned {
+  font-weight: 700;
+}
+
+/* Priority badge — no badge at all when the task has no priority. */
+.priority-pill {
+  font-weight: 650;
+}
+
+.pri-list {
+  margin-bottom: 10px;
+}
+
+.pri-row .icon-btn {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Subtask checklist on the card */
+.subtasks {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.subtask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subtask {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.subtask-check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.subtask-check .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.subtask-check.is-on {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.subtask-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.subtask-name {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.subtask.is-done .subtask-name {
+  text-decoration: line-through;
+  color: var(--text-3);
+}
+
+.subtask-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.subtask-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.subtask-meta .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.subtask-progress {
+  color: var(--text-2);
+}
+
+/* Subtask rows in the editor */
+.subtask-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.subtask-editor-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(110px, 0.8fr) minmax(100px, 1fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Stars */
+.round-btn.is-star-btn {
+  width: auto;
+  padding: 0 10px;
+  gap: 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 650;
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+  border-color: var(--border-strong);
+}
+
+.round-btn.is-star-btn .icon,
+.star-total .icon {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.star-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.star-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------- v3 review: trend + daily totals */
+
+.trend-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px 22px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.trend-control-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.trend-chart {
+  width: 100%;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+}
+
+.trend-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.trend-grid {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.trend-axis-text {
+  fill: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trend-area {
+  fill: var(--accent-soft);
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-point {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.trend-hint {
+  margin: 10px 2px 0;
+}
+
+.panel-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.panel-note strong {
+  font-weight: 700;
+}
+
+.data-table .table-total td {
+  border-top: 2px solid var(--border-strong);
+  background: var(--surface-2);
+}
+
+/* Responsive counter grid — only the container changes. */
+.counter-grid {
+  display: grid;
+  /* auto-fit collapses tracks with no cards, so 1–2 counters fill the row
+     instead of leaving empty columns of blank space. */
+  grid-template-columns: repeat(auto-fit, minmax(292px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .counter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .subtask-editor-row {
+    grid-template-columns: minmax(0, 1fr) 30px;
+  }
+
+  .subtask-editor-row .input-date,
+  .subtask-editor-row [data-sub-field="notes"] {
+    grid-column: 1 / -1;
   }
 }

@@ -20,7 +20,7 @@
 
   /* ------------------------------------------------------------ list layout */
 
-  const DEFAULT_LIST_VIEW = { groupBy: 'date', sortBy: 'due' };
+  const DEFAULT_LIST_VIEW = { groupBy: 'date', sortBy: 'due', typeTab: 'all' };
 
   function listView() {
     const lv = TT.Store.get().settings.listView;
@@ -191,8 +191,32 @@
       return true;
     }
 
+    if (action === 'toggle-pin') {
+      const task = TT.Model.taskById(id);
+      if (task) {
+        // `task` is a live reference into the store, which setPinned mutates
+        // in place — capture the old value before the commit for the message.
+        const wasPinned = !!task.pinned;
+        TT.Model.setPinned(id, !wasPinned);
+        UI.toast(wasPinned ? 'Unpinned' : 'Pinned to the top', 'success');
+      }
+      return true;
+    }
+
+    if (action === 'toggle-subtask') {
+      const task = TT.Model.taskById(id);
+      const sub = task && (task.subtasks || []).find((s) => s.id === el.getAttribute('data-sub'));
+      if (sub) TT.Model.setSubtaskDone(id, sub.id, !sub.completed);
+      return true;
+    }
+
     if (action === 'counter-inc') {
       TT.Counters.increment(id, 1);
+      return true;
+    }
+
+    if (action === 'counter-inc-star') {
+      TT.Counters.increment(id, 1, null, { star: true });
       return true;
     }
 

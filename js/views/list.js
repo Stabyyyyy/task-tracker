@@ -12,6 +12,14 @@
   const esc = U.escapeHtml;
 
   let root = null;
+  let lastNonProgressSort = 'due';
+
+  const TYPE_TABS = [
+    ['all', 'All tasks'],
+    ['counter', 'Counter'],
+    ['plain', 'One-time'],
+    ['recurring', 'Recurring']
+  ];
 
   function activeFilters() {
     return TT.App.filters;
@@ -20,7 +28,7 @@
   function filterCount(f) {
     let n = 0;
     if (f.search) n++;
-    n += f.tagIds.length + f.categoryIds.length;
+    n += f.tagIds.length + f.categoryIds.length + (f.priorityIds || []).length;
     if (f.dueFrom || f.dueTo) n++;
     return n;
   }
@@ -31,6 +39,7 @@
     root = container;
 
     container.innerHTML =
+      typeTabsHtml(TT.App.listView()) +
       '<div class="toolbar">' +
         '<div class="search-wrap">' + UI.icon('search') +
           '<input id="search-input" type="search" class="search-input" placeholder="Search tasks…" ' +
@@ -58,16 +67,33 @@
     bind();
   }
 
+  /** Type tabs control "what kind"; grouping still controls category/priority. */
+  function typeTabsHtml(lv) {
+    return '<div class="type-tabs" role="tablist" aria-label="Task type">' +
+      TYPE_TABS.map((pair) =>
+        '<button type="button" role="tab" class="type-tab' + (lv.typeTab === pair[0] ? ' is-active' : '') + '" ' +
+        'aria-selected="' + (lv.typeTab === pair[0] ? 'true' : 'false') + '" ' +
+        'data-action="set-type-tab" data-value="' + pair[0] + '">' + pair[1] + '</button>'
+      ).join('') +
+    '</div>';
+  }
+
   /** Group and sort controls. Kept out of the search row so the caret is safe. */
   function viewOptsHtml() {
     const lv = TT.App.listView();
-    const groups = [['date', 'Due date'], ['category', 'Category']];
+    const groups = [['date', 'Due date'], ['category', 'Category'], ['priority', 'Priority']];
     const sorts = [
       ['due', 'Due date'],
       ['category', 'Category'],
       ['tag', 'Tag'],
-      ['created', 'Created (newest)']
+      ['created', 'Created (newest)'],
+      ['priority-asc', 'Priority ↑'],
+      ['priority-desc', 'Priority ↓']
     ];
+    // Progress sorting only exists where it means something: the Counter tab.
+    if (lv.typeTab === 'counter') {
+      sorts.push(['progress-asc', 'Progress ↑'], ['progress-desc', 'Progress ↓']);
+    }
 
     const select = (id, label, options, current) =>
       '<label class="view-opt" for="' + id + '">' +
@@ -108,6 +134,10 @@
         '<div class="chip-row">' + tags + '</div>' +
       '</div>' : '') +
       '<div class="filter-row">' +
+        '<span class="filter-label">Priority</span>' +
+        '<div class="chip-row">' + priorityChips(f, s) + '</div>' +
+      '</div>' +
+      '<div class="filter-row">' +
         '<span class="filter-label">Due between</span>' +
         '<div class="chip-row">' +
           '<input type="date" class="input input-date" id="filter-from" value="' + esc(f.dueFrom) + '" aria-label="Due from">' +
@@ -118,6 +148,19 @@
       '</div>';
   }
 
+  function priorityChips(f, s) {
+    const chosen = f.priorityIds || [];
+    const rows = TT.Model.prioritiesSorted().map((p) =>
+      '<button type="button" class="chip chip-sm' + (chosen.indexOf(p.id) >= 0 ? ' is-on' : '') + '" ' +
+      'data-action="toggle-priority" data-id="' + p.id + '">' +
+      '<i class="dot cat-' + p.color + '"></i>' + esc(p.name) + '</button>'
+    );
+    rows.push('<button type="button" class="chip chip-sm' +
+      (chosen.indexOf(TT.Model.NO_PRIORITY) >= 0 ? ' is-on' : '') + '" ' +
+      'data-action="toggle-priority" data-id="' + TT.Model.NO_PRIORITY + '">No priority</button>');
+    return rows.join('');
+  }
+
   function renderBody() {
     if (!root) return;
     const body = root.querySelector('#list-body');
@@ -126,7 +169,7 @@
     const f = activeFilters();
     const today = U.todayKey();
     const lv = TT.App.listView();
-    const list = TT.Model.visibleTasks(f, lv.sortBy);
+    const list = TT.Model.visibleTasks(f, lv.sortBy, lv.typeTab);
     const counts = TT.Model.counts();
 
     if (!list.length) {
@@ -151,11 +194,43 @@
       return;
     }
 
+    // Pinned is its own group at the very top, above every date / category /
+    // priority group. The active sort still applies inside it.
+    const pinned = list.filter((t) => t.pinned);
+    const rest = list.filter((t) => !t.pinned);
     const groups = lv.groupBy === 'category'
-      ? TT.Model.groupTasksByCategory(list)
-      : TT.Model.groupTasks(list, today);
+      ? TT.Model.groupTasksByCategory(rest)
+      : lv.groupBy === 'priority'
+        ? TT.Model.groupTasksByPriority(rest)
+        : TT.Model.groupTasks(rest, today);
 
+    if (pinned.length) {
+      groups.unshift({ key: 'pinned', label: 'Pinned', color: 'slate', pin: true, tasks: pinned });
+    }
     body.innerHTML = groups.map((group) => groupHtml(group, lv.groupBy)).join('');
+  }
+
+  /**
+   * Consecutive counter cards share a responsive grid; everything else stays
+   * in the vertical stack. Grouping consecutive runs preserves sort order.
+   */
+  function cardsHtml(tasks) {
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      out.push('<div class="counter-grid">' + run.map((t) => UI.counterCard(t)).join('') + '</div>');
+      run = [];
+    };
+    tasks.forEach((t) => {
+      if (t.kind === 'counter') run.push(t);
+      else {
+        flush();
+        out.push(UI.taskCard(t));
+      }
+    });
+    flush();
+    return out.join('');
   }
 
   function groupHtml(group, groupBy) {
@@ -166,12 +241,13 @@
       '<button type="button" class="group-head" data-action="toggle-group" data-key="' + esc(key) + '" ' +
         'aria-expanded="' + (collapsed ? 'false' : 'true') + '">' +
         '<span class="group-chevron">' + UI.icon('right') + '</span>' +
-        (group.color ? '<i class="dot cat-' + group.color + '"></i>' : '') +
+        (group.pin ? '<span class="group-pin">' + UI.icon('pin') + '</span>'
+          : (group.color ? '<i class="dot cat-' + group.color + '"></i>' : '')) +
         '<span class="group-title">' + esc(group.label) + '</span>' +
         '<span class="group-count">' + group.tasks.length + '</span>' +
       '</button>' +
       '<div class="group-body"' + (collapsed ? ' hidden' : '') + '>' +
-        group.tasks.map((t) => (t.kind === 'counter' ? UI.counterCard(t) : UI.taskCard(t))).join('') +
+        cardsHtml(group.tasks) +
       '</div>' +
     '</section>';
   }
@@ -188,7 +264,11 @@
       groupBy.addEventListener('change', () => TT.App.setListView({ groupBy: groupBy.value }));
     }
     if (sortBy) {
-      sortBy.addEventListener('change', () => TT.App.setListView({ sortBy: sortBy.value }));
+      if (!/^progress-/.test(sortBy.value)) lastNonProgressSort = sortBy.value;
+      sortBy.addEventListener('change', () => {
+        if (!/^progress-/.test(sortBy.value)) lastNonProgressSort = sortBy.value;
+        TT.App.setListView({ sortBy: sortBy.value });
+      });
     }
 
     if (input) {
@@ -257,6 +337,29 @@
       if (i >= 0) f.tagIds.splice(i, 1);
       else f.tagIds.push(id);
       TT.App.render();
+      return true;
+    }
+
+    if (action === 'toggle-priority') {
+      const id = el.getAttribute('data-id');
+      f.priorityIds = f.priorityIds || [];
+      const i = f.priorityIds.indexOf(id);
+      if (i >= 0) f.priorityIds.splice(i, 1);
+      else f.priorityIds.push(id);
+      TT.App.render();
+      return true;
+    }
+
+    if (action === 'set-type-tab') {
+      const next = el.getAttribute('data-value');
+      const lv = TT.App.listView();
+      // Progress sort only exists on the Counter tab; restore the last
+      // ordinary sort when leaving it.
+      if (lv.typeTab === 'counter' && next !== 'counter' && /^progress-/.test(lv.sortBy)) {
+        TT.App.setListView({ typeTab: next, sortBy: lastNonProgressSort });
+      } else {
+        TT.App.setListView({ typeTab: next });
+      }
       return true;
     }
 

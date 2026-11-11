@@ -24,6 +24,7 @@
       search: '',
       tagIds: f.tagIds,
       categoryIds: f.categoryIds,
+      priorityIds: f.priorityIds || [],
       dueFrom: '',
       dueTo: '',
       status: 'all'
@@ -100,7 +101,9 @@
               shown.map((t) =>
                 '<span class="cal-pill cat-' + pillColor(t) +
                 (t.completedAt ? ' is-done' : '') +
+                (t.pinned ? ' is-pinned' : '') +
                 (TT.Model.isOverdue(t, today) ? ' is-overdue' : '') + '">' +
+                (t.pinned ? '<span class="cal-pin" title="Pinned">' + UI.icon('pin') + '</span>' : '') +
                 esc(t.title) + '</span>'
               ).join('') +
               (dayTasks.length > 3 ? '<span class="cal-more">+' + (dayTasks.length - 3) + ' more</span>' : '') +

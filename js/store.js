@@ -12,8 +12,10 @@
   const KEY = 'tasktracker.v1';
   const PREIMPORT_KEY = 'tasktracker.preimport';
   // v2 added counter.periods (per-period target + outcome snapshots) and
-  // settings.listView. Both are additive, so v1 data migrates in place.
-  const APP_VERSION = 2;
+  // settings.listView. v3 added priorities, the daily ledger, pinned tasks,
+  // subtasks and counter stars. Every addition is optional, so v1/v2 data
+  // migrates in place and old exports still import.
+  const APP_VERSION = 3;
 
   const DEFAULT_CATEGORIES = [
     { id: 'cat_work', name: 'Work', color: 'blue' },
@@ -35,6 +37,9 @@
   const COUNTER_TYPES = ['daily', 'cumulative', 'periodic'];
   const OUTCOMES = ['met', 'missed', 'exceeded', 'none', 'unknown'];
   const UNITS = ['day', 'week', 'month'];
+  const SORT_KEYS = ['due', 'category', 'tag', 'created', 'priority-asc', 'priority-desc', 'progress-asc', 'progress-desc'];
+  const GROUP_KEYS = ['date', 'category', 'priority'];
+  const TYPE_TABS = ['all', 'counter', 'plain', 'recurring'];
 
   let state = null;
   const subscribers = [];
@@ -49,7 +54,7 @@
       theme: 'system',
       notified: {},
       lastBackupAt: null,
-      listView: { groupBy: 'date', sortBy: 'due' }
+      listView: { groupBy: 'date', sortBy: 'due', typeTab: 'all' }
     };
   }
 
@@ -60,6 +65,8 @@
       tasks: [],
       categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
       tags: DEFAULT_TAGS.map((t) => ({ ...t })),
+      priorities: [],
+      daily: {},
       settings: defaultSettings(),
       meta: { createdAt: now, updatedAt: now, appVersion: APP_VERSION }
     };
@@ -80,8 +87,9 @@
     const d = defaultSettings().listView;
     const lv = settings.listView && typeof settings.listView === 'object' ? settings.listView : {};
     settings.listView = {
-      groupBy: lv.groupBy === 'category' ? 'category' : 'date',
-      sortBy: ['due', 'category', 'tag', 'created'].indexOf(lv.sortBy) >= 0 ? lv.sortBy : d.sortBy
+      groupBy: GROUP_KEYS.indexOf(lv.groupBy) >= 0 ? lv.groupBy : d.groupBy,
+      sortBy: SORT_KEYS.indexOf(lv.sortBy) >= 0 ? lv.sortBy : d.sortBy,
+      typeTab: TYPE_TABS.indexOf(lv.typeTab) >= 0 ? lv.typeTab : d.typeTab
     };
   }
 
@@ -109,6 +117,75 @@
     });
   }
 
+  /* --------------------------------------------------- v3 normalisation */
+
+  /**
+   * Every v3 field is optional. This runs on load, on import and on undo, and
+   * is deliberately idempotent: already-valid values survive untouched.
+   */
+  function normalizeSubtasks(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    raw.forEach((row, i) => {
+      if (!row || typeof row !== 'object') return;
+      const name = typeof row.name === 'string' ? row.name.trim() : '';
+      if (!name) return; // a nameless row is not worth keeping
+      const done = !!row.completed;
+      out.push({
+        id: typeof row.id === 'string' && row.id.trim() ? row.id.trim() : U.uid('sub'),
+        name,
+        date: U.isDateKey(row.date) ? row.date : null,
+        notes: typeof row.notes === 'string' ? row.notes : '',
+        completed: done,
+        completedAt: done && row.completedAt ? isoOr(row.completedAt, null) : null,
+        order: Number.isFinite(Number(row.order)) ? Number(row.order) : i
+      });
+    });
+    out.sort((a, b) => a.order - b.order);
+    out.forEach((row, i) => { row.order = i; });
+    return out;
+  }
+
+  function normalizePriorities(raw) {
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set();
+    return raw.filter((p) => p && typeof p === 'object' && typeof p.id === 'string' && p.id.trim())
+      .map((p, i) => {
+        const id = p.id.trim();
+        if (seen.has(id)) return null;
+        seen.add(id);
+        return {
+          id,
+          name: typeof p.name === 'string' && p.name.trim() ? p.name.trim() : 'Priority ' + (i + 1),
+          level: Number.isFinite(Number(p.level)) ? Number(p.level) : i,
+          color: CATEGORY_COLORS.indexOf(p.color) >= 0 ? p.color : 'slate'
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeV3(next) {
+    next.priorities = normalizePriorities(next.priorities);
+    const ids = new Set(next.priorities.map((p) => p.id));
+    next.daily = TT.Daily ? TT.Daily.normalizeDaily(next.daily) : {};
+
+    next.tasks.forEach((t) => {
+      if (!t || typeof t !== 'object') return;
+      t.pinned = !!t.pinned;
+      t.priorityId = typeof t.priorityId === 'string' && ids.has(t.priorityId) ? t.priorityId : null;
+      if (t.kind === 'counter') {
+        t.subtasks = [];
+        if (t.counter) {
+          const stars = Number(t.counter.stars);
+          t.counter.stars = Number.isFinite(stars) ? Math.max(0, Math.round(stars)) : 0;
+        }
+      } else {
+        t.subtasks = normalizeSubtasks(t.subtasks);
+      }
+    });
+    return next;
+  }
+
   function migrate(raw) {
     const base = blankState();
     if (!raw || typeof raw !== 'object') return base;
@@ -118,6 +195,8 @@
       tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
       categories: Array.isArray(raw.categories) && raw.categories.length ? raw.categories : base.categories,
       tags: Array.isArray(raw.tags) ? raw.tags : base.tags,
+      priorities: raw.priorities,
+      daily: raw.daily,
       settings: Object.assign(defaultSettings(), raw.settings || {}),
       meta: Object.assign(base.meta, raw.meta || {})
     };
@@ -126,7 +205,7 @@
     }
     normalizeListView(next.settings);
     migrateCounters(next);
-    return next;
+    return normalizeV3(next);
   }
 
   function load() {
@@ -350,6 +429,11 @@
         status,
         archivedAt: status === 'archived' ? isoOr(t.archivedAt, updatedAt) : null,
         kind,
+        pinned: !!t.pinned,
+        priorityId: typeof t.priorityId === 'string' ? t.priorityId : null,
+        // Counters have no subtasks; a malformed row is dropped one at a time
+        // by normalizeV3, never by failing the whole import.
+        subtasks: kind === 'counter' ? [] : (Array.isArray(t.subtasks) ? t.subtasks : []),
         reminders: {
           onDue: !!(t.reminders && t.reminders.onDue),
           onRecurrence: !!(t.reminders && t.reminders.onRecurrence),
@@ -433,6 +517,7 @@
             });
           }
 
+          const stars = Number(c.stars);
           task.counter = {
             type: c.type,
             period: c.type === 'periodic' ? (c.period === 'month' ? 'month' : 'week') : null,
@@ -441,6 +526,7 @@
             periodKey: HISTORY_KEY.test(String(c.periodKey)) ? c.periodKey : null,
             history,
             periods,
+            stars: Number.isFinite(stars) ? Math.max(0, Math.round(stars)) : 0,
             log: []
           };
         }
@@ -461,6 +547,8 @@
       tasks,
       categories: categories.length ? categories : DEFAULT_CATEGORIES.map((c) => ({ ...c })),
       tags,
+      priorities: Array.isArray(raw.priorities) ? raw.priorities : [],
+      daily: raw.daily,
       settings,
       meta: {
         createdAt: isoOr(raw.meta && raw.meta.createdAt, U.nowISO()),
@@ -480,6 +568,8 @@
     // A v1 backup has history but no period records — build them here too, so
     // importing an old file lands in the same shape as loading old localStorage.
     migrateCounters(nextState);
+    normalizeListView(nextState.settings);
+    normalizeV3(nextState);
 
     return { ok: true, errors: [], state: nextState };
   }
@@ -543,6 +633,9 @@
       status: 'active',
       archivedAt: null,
       kind: 'plain',
+      pinned: false,
+      priorityId: null,
+      subtasks: [],
       reminders: { onDue: false, onRecurrence: false, counterTime: null },
       recurrence: null,
       counter: null
@@ -609,6 +702,8 @@
           value: 3,
           periodKey: today,
           history: Object.assign({}, waterHistory, { [today]: 3 }),
+          periods: {},
+          stars: 0,
           log: []
         }
       }),
@@ -623,6 +718,8 @@
           value: 0,
           periodKey: today,
           history: { [U.addDays(today, -40)]: 2, [U.addDays(today, -18)]: 1, [U.addDays(today, -3)]: 3 },
+          periods: {},
+          stars: 0,
           log: []
         }
       }),
@@ -641,6 +738,8 @@
             [U.isoWeekKey(U.addDays(today, -14))]: 5,
             [U.isoWeekKey(U.addDays(today, -7))]: 3
           },
+          periods: {},
+          stars: 0,
           log: []
         }
       }),
@@ -681,6 +780,11 @@
     STATUSES,
     KINDS,
     COUNTER_TYPES,
+    SORT_KEYS,
+    GROUP_KEYS,
+    TYPE_TABS,
+    normalizeSubtasks,
+    normalizePriorities,
     load,
     get,
     subscribe,

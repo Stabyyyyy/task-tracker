@@ -29,6 +29,20 @@
     return state().categories.find((c) => c.id === id) || null;
   }
 
+  // Priority labels reuse the same eight colour tokens as categories, so a
+  // recolour never needs bespoke CSS and works in both themes.
+  const PRIORITY_COLORS = ['blue', 'green', 'purple', 'orange', 'pink', 'teal', 'red', 'slate'];
+
+  function priorityById(id) {
+    if (!id) return null;
+    return state().priorities.find((p) => p.id === id) || null;
+  }
+
+  /** Level-sorted labels; callers render "No priority" separately. */
+  function prioritiesSorted() {
+    return state().priorities.slice().sort((a, b) => (a.level - b.level) || a.name.localeCompare(b.name));
+  }
+
   /**
    * The category that gives a card its colour bar: the one owning most of the
    * task's tags. Ties go to whichever category comes first in settings, so the
@@ -85,6 +99,9 @@
       status: 'active',
       archivedAt: null,
       kind,
+      pinned: !!draft.pinned,
+      priorityId: priorityById(draft.priorityId) ? draft.priorityId : null,
+      subtasks: kind === 'counter' ? [] : TT.Store.normalizeSubtasks(draft.subtasks),
       reminders: normalizeReminders(draft.reminders, kind),
       recurrence: null,
       counter: null
@@ -122,6 +139,16 @@
       t.updatedAt = U.nowISO();
       t.reminders = normalizeReminders(draft.reminders, kind);
 
+      // The editor always supplies these; the guards keep other callers of
+      // updateTask() from accidentally wiping them.
+      if (draft.pinned !== undefined) t.pinned = !!draft.pinned;
+      if (draft.priorityId !== undefined) {
+        t.priorityId = priorityById(draft.priorityId) ? draft.priorityId : null;
+      }
+      if (draft.subtasks !== undefined) {
+        t.subtasks = kind === 'counter' ? [] : TT.Store.normalizeSubtasks(draft.subtasks);
+      }
+
       if (kind === 'recurring') {
         if (!t.dueDate) t.dueDate = U.todayKey();
         const rule = TT.Recur.normalizeRule(draft.recurrence, t.dueDate);
@@ -145,6 +172,7 @@
             (t.counter.period || null) === (next.period || null);
           next.history = t.counter.history;
           next.periods = t.counter.periods || {};
+          next.stars = Number(t.counter.stars) || 0;
           next.log = t.counter.log;
           if (sameShape) {
             next.value = t.counter.value;
@@ -166,9 +194,63 @@
       task.createdAt === task.updatedAt;
   }
 
+  /** Clear every checkbox — used when a parent is reopened via its own box. */
+  function clearSubtasks(t) {
+    (t.subtasks || []).forEach((sub) => {
+      sub.completed = false;
+      sub.completedAt = null;
+    });
+  }
+
+  function checkAllSubtasks(t, now) {
+    (t.subtasks || []).forEach((sub) => {
+      sub.completed = true;
+      if (!sub.completedAt) sub.completedAt = now;
+    });
+  }
+
+  /**
+   * Shared by the parent checkbox and by subtask checkboxes so completion
+   * always updates the daily ledger and always spawns a repeat exactly once.
+   */
+  function markDone(t, s, now) {
+    if (t.status === 'done') return null;
+    t.status = 'done';
+    t.completedAt = now;
+    t.updatedAt = now;
+    if (t.kind !== 'counter' && TT.Daily) TT.Daily.bumpCompleted(s, now, 1);
+
+    let spawned = null;
+    let ended = false;
+    if (t.kind === 'recurring' && t.recurrence && !t.recurrence.spawnedTaskId) {
+      spawned = TT.Recur.spawnNext(t, U.todayKey());
+      if (spawned) {
+        s.tasks.push(spawned);
+        t.recurrence.spawnedTaskId = spawned.id;
+      } else {
+        t.recurrence.seriesEndedAt = now;
+        ended = true;
+      }
+    }
+    return { spawned, ended };
+  }
+
+  function markActive(t, s, now) {
+    if (t.status !== 'done') return;
+    if (t.completedAt && t.kind !== 'counter' && TT.Daily) {
+      TT.Daily.bumpCompleted(s, t.completedAt, -1);
+    }
+    t.status = 'active';
+    t.completedAt = null;
+    t.updatedAt = now;
+    if (t.recurrence) t.recurrence.seriesEndedAt = null;
+  }
+
   /**
    * Complete / un-complete. Completing a recurring task keeps the instance as
-   * a record and spawns exactly one successor.
+   * a record and spawns exactly one successor. For a task with subtasks the
+   * checkbox checks them all (and un-checks them all again on reopen) — no
+   * guard, no dialog: completion is derived from the checklist.
    */
   function toggleComplete(id) {
     const task = taskById(id);
@@ -184,10 +266,9 @@
       TT.Store.commit((s) => {
         const t = s.tasks.find((x) => x.id === id);
         if (!t) return;
-        t.status = 'active';
-        t.completedAt = null;
-        t.updatedAt = U.nowISO();
-        if (t.recurrence) t.recurrence.seriesEndedAt = null;
+        const now = U.nowISO();
+        markActive(t, s, now);
+        clearSubtasks(t);
 
         if (childId) {
           const child = s.tasks.find((x) => x.id === childId);
@@ -210,23 +291,52 @@
     TT.Store.commit((s) => {
       const t = s.tasks.find((x) => x.id === id);
       if (!t) return;
-      t.status = 'done';
-      t.completedAt = U.nowISO();
-      t.updatedAt = t.completedAt;
-
-      if (t.kind === 'recurring' && t.recurrence && !t.recurrence.spawnedTaskId) {
-        spawned = TT.Recur.spawnNext(t, U.todayKey());
-        if (spawned) {
-          s.tasks.push(spawned);
-          t.recurrence.spawnedTaskId = spawned.id;
-        } else {
-          t.recurrence.seriesEndedAt = U.nowISO();
-          ended = true;
-        }
+      const now = U.nowISO();
+      checkAllSubtasks(t, now);
+      const result = markDone(t, s, now);
+      if (result) {
+        spawned = result.spawned;
+        ended = result.ended;
       }
     });
 
     return { ok: true, completed: true, spawnedId: spawned && spawned.id, ended };
+  }
+
+  /**
+   * Toggle one subtask, in any order. Parent completion is derived: all
+   * checked -> done, any unchecked -> active. No locking and no confirmation.
+   */
+  function setSubtaskDone(taskId, subId, done) {
+    const task = taskById(taskId);
+    if (!task || task.kind === 'counter' || task.status === 'archived') return { ok: false };
+    const sub = (task.subtasks || []).find((x) => x.id === subId);
+    if (!sub) return { ok: false };
+
+    TT.Store.commit((s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t) return;
+      const row = (t.subtasks || []).find((x) => x.id === subId);
+      if (!row) return;
+      const now = U.nowISO();
+      row.completed = !!done;
+      row.completedAt = done ? now : null;
+      t.updatedAt = now;
+
+      const allDone = t.subtasks.length > 0 && t.subtasks.every((x) => x.completed);
+      if (allDone && t.status !== 'done') markDone(t, s, now);
+      else if (!allDone && t.status === 'done') markActive(t, s, now);
+    });
+    return { ok: true };
+  }
+
+  function setPinned(id, pinned) {
+    TT.Store.commit((s) => {
+      const t = s.tasks.find((x) => x.id === id);
+      if (!t) return;
+      t.pinned = !!pinned;
+      t.updatedAt = U.nowISO();
+    });
   }
 
   function archiveTask(id) {
@@ -251,6 +361,10 @@
 
   function deleteTask(id) {
     TT.Store.commit((s) => {
+      const gone = s.tasks.find((x) => x.id === id);
+      if (gone && gone.status === 'done' && gone.completedAt && gone.kind !== 'counter' && TT.Daily) {
+        TT.Daily.bumpCompleted(s, gone.completedAt, -1);
+      }
       s.tasks = s.tasks.filter((x) => x.id !== id);
       s.tasks.forEach((t) => {
         if (t.recurrence && t.recurrence.spawnedTaskId === id) {
@@ -267,11 +381,24 @@
       search: '',
       tagIds: [],
       categoryIds: [],
+      priorityIds: [],
       dueFrom: '',
       dueTo: '',
       status: 'active'
     };
   }
+
+  /**
+   * A task's tab is derived from fields, never stored. A counter wins even if
+   * a recurrence is somehow also present; subtasks follow their parent.
+   */
+  function typeOf(task) {
+    if (task.counter || task.kind === 'counter') return 'counter';
+    if (task.recurrence || task.kind === 'recurring') return 'recurring';
+    return 'plain';
+  }
+
+  const NO_PRIORITY = '__none';
 
   function matches(task, f) {
     const s = state();
@@ -291,6 +418,11 @@
         return tag && f.categoryIds.indexOf(tag.categoryId) >= 0;
       });
       if (!hit) return false;
+    }
+
+    if (f.priorityIds && f.priorityIds.length) {
+      const key = task.priorityId || NO_PRIORITY;
+      if (f.priorityIds.indexOf(key) < 0) return false;
     }
 
     if (f.dueFrom) {
@@ -361,11 +493,65 @@
       };
     }
 
+    if (sortBy === 'priority-asc' || sortBy === 'priority-desc') {
+      return (a, b) => {
+        const pa = priorityById(a.priorityId);
+        const pb = priorityById(b.priorityId);
+        // "No priority" is its own bucket, always last, in both directions.
+        if (!pa && pb) return 1;
+        if (pa && !pb) return -1;
+        if (pa && pb) {
+          if (pa.level !== pb.level) {
+            const d = pa.level - pb.level;
+            return sortBy === 'priority-asc' ? d : -d;
+          }
+          if (pa.name !== pb.name) return pa.name < pb.name ? -1 : 1;
+        }
+        return compare(a, b);
+      };
+    }
+
+    if (sortBy === 'progress-asc' || sortBy === 'progress-desc') {
+      return (a, b) => {
+        const va = progressValue(a);
+        const vb = progressValue(b);
+        if (va === null && vb !== null) return 1;
+        if (va !== null && vb === null) return -1;
+        if (va !== null && va !== vb) {
+          return sortBy === 'progress-asc' ? va - vb : vb - va;
+        }
+        return compare(a, b);
+      };
+    }
+
     return compare;
   }
 
-  function visibleTasks(filters, sortBy) {
-    return allTasks().filter((t) => matches(t, filters)).sort(compareBy(sortBy));
+  /**
+   * Ordering key for the counter tab. With a target it is current/target;
+   * without one the raw current count is used, so targetless counters still
+   * have a defined position. Non-counters always fall to the end.
+   */
+  function progressValue(task) {
+    if (!task.counter) return null;
+    const p = TT.Counters.progress(task);
+    if (p.target != null && p.target > 0) return p.value / p.target;
+    return p.value;
+  }
+
+  function visibleTasks(filters, sortBy, typeTab) {
+    const cmp = compareBy(sortBy);
+    const tab = typeTab || 'all';
+    return allTasks()
+      .filter((t) => matches(t, filters))
+      .filter((t) => tab === 'all' || typeOf(t) === tab)
+      // Pinned floats above everything, whatever the sort or grouping.
+      .sort((a, b) => {
+        const pa = !!a.pinned;
+        const pb = !!b.pinned;
+        if (pa !== pb) return pa ? -1 : 1;
+        return cmp(a, b);
+      });
   }
 
   function isOverdue(task, today) {
@@ -436,12 +622,35 @@
     return out;
   }
 
+  /** Priority groups follow the user's level order; None is always its own last bucket. */
+  function groupTasksByPriority(list) {
+    const buckets = {};
+    list.forEach((t) => {
+      const p = priorityById(t.priorityId);
+      const key = p ? p.id : '__none';
+      (buckets[key] = buckets[key] || []).push(t);
+    });
+
+    const out = [];
+    prioritiesSorted().forEach((p) => {
+      if (buckets[p.id] && buckets[p.id].length) {
+        out.push({ key: p.id, label: p.name, color: p.color, tasks: buckets[p.id] });
+      }
+    });
+    if (buckets.__none && buckets.__none.length) {
+      out.push({ key: '__none', label: 'No priority', color: 'slate', tasks: buckets.__none });
+    }
+    return out;
+  }
+
   /* -------------------------------------------------------------- counters */
 
   function countersMatching(filters) {
     const f = Object.assign(emptyFilters(), filters);
     return allTasks()
-      .filter((t) => t.kind === 'counter' && matches(t, Object.assign({}, f, { status: 'active' })))
+      // Review deliberately ignores the priority filter: priority has no
+      // breakdown and no trend anywhere on the stats page.
+      .filter((t) => t.kind === 'counter' && matches(t, Object.assign({}, f, { status: 'active', priorityIds: [] })))
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   }
 
@@ -529,6 +738,57 @@
     });
   }
 
+  /* ------------------------------------------------------------- priorities */
+
+  function priorityUsage(id) {
+    return allTasks().filter((t) => t.priorityId === id).length;
+  }
+
+  function addPriority(name, color, level) {
+    TT.Store.commit((s) => {
+      const levels = s.priorities.map((p) => Number(p.level) || 0);
+      const nextLevel = Number.isFinite(Number(level))
+        ? Number(level)
+        : (levels.length ? Math.max.apply(null, levels) + 1 : 0);
+      s.priorities.push({
+        id: U.uid('pri'),
+        name: String(name || '').trim() || 'Untitled',
+        level: nextLevel,
+        color: PRIORITY_COLORS.indexOf(color) >= 0 ? color : 'slate'
+      });
+    });
+  }
+
+  function updatePriority(id, patch) {
+    TT.Store.commit((s) => {
+      const p = s.priorities.find((x) => x.id === id);
+      if (!p) return;
+      if (patch.name != null) p.name = String(patch.name).trim() || p.name;
+      if (patch.color && PRIORITY_COLORS.indexOf(patch.color) >= 0) p.color = patch.color;
+      if (patch.level !== undefined && Number.isFinite(Number(patch.level))) p.level = Number(patch.level);
+    });
+  }
+
+  /** Deleting an in-use label is allowed: those tasks fall back to None. */
+  function deletePriority(id) {
+    TT.Store.commit((s) => {
+      s.priorities = s.priorities.filter((p) => p.id !== id);
+      s.tasks.forEach((t) => {
+        if (t.priorityId === id) t.priorityId = null;
+      });
+    });
+  }
+
+  /** `ids` is the desired order; levels are rewritten to match it. */
+  function reorderPriorities(ids) {
+    TT.Store.commit((s) => {
+      ids.forEach((id, i) => {
+        const p = s.priorities.find((x) => x.id === id);
+        if (p) p.level = i;
+      });
+    });
+  }
+
   /* ------------------------------------------------------------------ misc */
 
   function counts() {
@@ -550,9 +810,16 @@
     tagById,
     categoryById,
     primaryCategory,
+    priorityById,
+    prioritiesSorted,
+    PRIORITY_COLORS,
+    NO_PRIORITY,
+    typeOf,
     createTask,
     updateTask,
     toggleComplete,
+    setSubtaskDone,
+    setPinned,
     archiveTask,
     restoreTask,
     deleteTask,
@@ -565,8 +832,14 @@
     bucketOf,
     groupTasks,
     groupTasksByCategory,
+    groupTasksByPriority,
     BUCKET_LABELS,
     countersMatching,
+    priorityUsage,
+    addPriority,
+    updatePriority,
+    deletePriority,
+    reorderPriorities,
     tagUsage,
     categoryUsage,
     addCategory,

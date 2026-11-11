@@ -80,6 +80,18 @@
       status: 'active',
       archivedAt: null,
       kind: 'recurring',
+      pinned: !!task.pinned,
+      priorityId: task.priorityId || null,
+      // The next occurrence starts with a fresh, all-unchecked checklist.
+      subtasks: (task.subtasks || []).map((sub, i) => ({
+        id: sub.id,
+        name: sub.name,
+        date: sub.date || null,
+        notes: sub.notes || '',
+        completed: false,
+        completedAt: null,
+        order: Number.isFinite(Number(sub.order)) ? Number(sub.order) : i
+      })),
       reminders: {
         onDue: !!(task.reminders && task.reminders.onDue),
         onRecurrence: !!(task.reminders && task.reminders.onRecurrence),
